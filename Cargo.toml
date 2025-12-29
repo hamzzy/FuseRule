@@ -41,3 +41,5 @@ tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
+proptest = "1.5"
+rustyline = "15.0"

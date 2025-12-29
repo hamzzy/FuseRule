@@ -38,6 +38,18 @@ enum Commands {
         #[arg(short, long)]
         predicate: Option<String>,
     },
+    /// Start interactive REPL mode
+    Repl {
+        /// Path to the configuration file
+        #[arg(short, long, default_value = "fuse_rule_config.yaml")]
+        config: String,
+    },
+    /// Start rule debugger
+    Debug {
+        /// Path to the configuration file
+        #[arg(short, long, default_value = "fuse_rule_config.yaml")]
+        config: String,
+    },
 }
 
 #[tokio::main]
@@ -50,6 +62,24 @@ async fn main() -> Result<()> {
     match &args.command {
         Commands::Validate { config, predicate } => {
             arrow_rule_agent::cli::validate_rule(config, predicate.as_deref()).await?;
+        }
+        Commands::Repl { config } => {
+            println!("🔥 Starting FuseRule REPL...");
+            let config_data = FuseRuleConfig::from_file(config)?;
+            let engine = RuleEngine::from_config(config_data.clone()).await?;
+            let shared_engine = Arc::new(RwLock::new(engine));
+            let schema = shared_engine.read().await.schema();
+            let mut repl = arrow_rule_agent::repl::Repl::new(shared_engine, schema);
+            repl.run().await?;
+        }
+        Commands::Debug { config } => {
+            println!("🐛 Starting FuseRule Debugger...");
+            let config_data = FuseRuleConfig::from_file(config)?;
+            let schema = RuleEngine::from_config(config_data.clone())
+                .await
+                .map(|e| e.schema())?;
+            let mut debugger = arrow_rule_agent::debugger::RuleDebugger::new(schema);
+            debugger.run().await?;
         }
         Commands::Run { config, port } => {
             println!("🔥 Initializing FuseRule Daemon...");
