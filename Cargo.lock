@@ -322,42 +322,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arrow-rule-agent"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arrow",
- "arrow-json",
- "async-trait",
- "axum",
- "chrono",
- "clap",
- "config",
- "datafusion",
- "env_logger",
- "futures",
- "handlebars",
- "lazy_static",
- "log",
- "proptest",
- "rdkafka",
- "reqwest",
- "rustyline",
- "serde",
- "serde_json",
- "serde_yaml",
- "sled",
- "tempfile",
- "tokio",
- "tokio-test",
- "tokio-tungstenite",
- "tower-http 0.5.2",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "arrow-schema"
 version = "53.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1519,6 +1483,42 @@ checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
 dependencies = [
  "libc",
  "winapi",
+]
+
+[[package]]
+name = "fuse-rule"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arrow",
+ "arrow-json",
+ "async-trait",
+ "axum",
+ "chrono",
+ "clap",
+ "config",
+ "datafusion",
+ "env_logger",
+ "futures",
+ "handlebars",
+ "lazy_static",
+ "log",
+ "proptest",
+ "rdkafka",
+ "reqwest",
+ "rustyline",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sled",
+ "tempfile",
+ "tokio",
+ "tokio-test",
+ "tokio-tungstenite",
+ "tower-http 0.5.2",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
