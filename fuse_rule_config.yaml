@@ -1,6 +1,12 @@
 engine:
   persistence_path: "fuserule_state"
 
+schema:
+  - name: "amount"
+    data_type: "int32"
+  - name: "cpu_usage"
+    data_type: "float64"
+
 agents:
   - name: "logger"
     type: "logger"

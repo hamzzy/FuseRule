@@ -1,6 +1,4 @@
 use arrow::record_batch::RecordBatch;
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use async_trait::async_trait;
 
 #[derive(Debug, Clone)]

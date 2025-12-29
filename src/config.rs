@@ -5,8 +5,15 @@ use anyhow::Result;
 #[derive(Debug, Deserialize, Clone)]
 pub struct FuseRuleConfig {
     pub engine: EngineConfig,
+    pub schema: Vec<FieldDef>,
     pub rules: Vec<RuleConfig>,
     pub agents: Vec<AgentConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct FieldDef {
+    pub name: String,
+    pub data_type: String, // "int32", "float64", "utf8", "bool"
 }
 
 #[derive(Debug, Deserialize, Clone)]

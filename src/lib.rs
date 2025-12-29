@@ -4,6 +4,7 @@ pub mod agent;
 pub mod evaluator;
 pub mod window;
 pub mod config;
+pub mod server;
 
 use arrow::record_batch::RecordBatch;
 use crate::rule::Rule;
@@ -23,6 +24,7 @@ pub struct RuleEngine {
     state: EngineState,
     window_buffers: HashMap<String, WindowBuffer>,
     agents: HashMap<String, Arc<dyn Agent>>,
+    schema: Arc<arrow::datatypes::Schema>,
 }
 
 impl RuleEngine {
@@ -33,13 +35,28 @@ impl RuleEngine {
             state: EngineState::new(persistence_path)?,
             window_buffers: HashMap::new(),
             agents: HashMap::new(),
+            schema: Arc::new(arrow::datatypes::Schema::empty()),
         })
     }
 
     pub fn from_config(config: FuseRuleConfig) -> Result<Self> {
         let mut engine = Self::new(&config.engine.persistence_path)?;
         
-        // Add Agents
+        // 1. Build Schema
+        let mut fields = Vec::new();
+        for f in config.schema {
+            let dt = match f.data_type.as_str() {
+                "int32" => arrow::datatypes::DataType::Int32,
+                "float64" => arrow::datatypes::DataType::Float64,
+                "bool" => arrow::datatypes::DataType::Boolean,
+                _ => arrow::datatypes::DataType::Utf8,
+            };
+            fields.push(arrow::datatypes::Field::new(f.name, dt, true));
+        }
+        let schema = Arc::new(arrow::datatypes::Schema::new(fields));
+        engine.schema = Arc::clone(&schema);
+
+        // 2. Add Agents
         for agent_cfg in config.agents {
             match agent_cfg.r#type.as_str() {
                 "logger" => {
@@ -54,7 +71,22 @@ impl RuleEngine {
             }
         }
 
+        // 3. Add Rules
+        for r_cfg in config.rules {
+            engine.add_rule(Rule {
+                id: r_cfg.id,
+                name: r_cfg.name,
+                predicate: r_cfg.predicate,
+                action: r_cfg.action,
+                window_seconds: r_cfg.window_seconds,
+            }, &schema)?;
+        }
+
         Ok(engine)
+    }
+
+    pub fn schema(&self) -> Arc<arrow::datatypes::Schema> {
+        Arc::clone(&self.schema)
     }
 
     pub fn add_agent(&mut self, name: String, agent: Arc<dyn Agent>) {

@@ -91,3 +91,28 @@ pub struct CompiledPhysicalRule {
     pub rule: Rule,
     pub expr: Expr,
 }
+
+pub fn infer_json_schema(value: &serde_json::Value) -> arrow::datatypes::Schema {
+    match value {
+        serde_json::Value::Array(arr) => {
+            if arr.is_empty() {
+                return arrow::datatypes::Schema::empty();
+            }
+            // Simple inference from first element
+            let mut fields = Vec::new();
+            if let Some(serde_json::Value::Object(map)) = arr.get(0) {
+                for (k, v) in map {
+                    let dt = match v {
+                        serde_json::Value::Number(n) if n.is_i64() => arrow::datatypes::DataType::Int32, // Default to i32 for simplicity
+                        serde_json::Value::Number(_) => arrow::datatypes::DataType::Float64,
+                        serde_json::Value::Bool(_) => arrow::datatypes::DataType::Boolean,
+                        _ => arrow::datatypes::DataType::Utf8,
+                    };
+                    fields.push(arrow::datatypes::Field::new(k, dt, true));
+                }
+            }
+            arrow::datatypes::Schema::new(fields)
+        }
+        _ => arrow::datatypes::Schema::empty(),
+    }
+}

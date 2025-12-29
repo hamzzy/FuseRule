@@ -39,25 +39,11 @@ async fn main() -> Result<()> {
     let config = FuseRuleConfig::from_file("fuse_rule_config.yaml")?;
     println!("📖 Config loaded: {} rules, {} agents", config.rules.len(), config.agents.len());
 
-    // 3. Initialize Engine
+    // 3. Initialize Engine (Rules and Agents are loaded here)
     let mut engine = RuleEngine::from_config(config.clone())?;
 
-    // 4. Setup Data Schema (for the rules in yaml)
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("amount", DataType::Int32, false),
-        Field::new("cpu_usage", DataType::Float64, false),
-    ]));
-
-    // Manually add rules from config into the engine (we could automate this in from_config too)
-    for r_cfg in &config.rules {
-        engine.add_rule(Rule {
-            id: r_cfg.id.clone(),
-            name: r_cfg.name.clone(),
-            predicate: r_cfg.predicate.clone(),
-            action: r_cfg.action.clone(),
-            window_seconds: r_cfg.window_seconds,
-        }, &schema)?;
-    }
+    // 4. Setup Data Schema (for manual batch creation)
+    let schema = engine.schema();
 
     // 5. Simulate Data
     println!("\n📥 Batch 1: High CPU usage (r2: System Spike)");
