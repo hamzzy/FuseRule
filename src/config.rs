@@ -28,7 +28,11 @@ pub struct RuleConfig {
     pub predicate: String,
     pub action: String,
     pub window_seconds: Option<u64>,
+    #[serde(default = "default_version")]
+    pub version: u32,
 }
+
+fn default_version() -> u32 { 1 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AgentConfig {

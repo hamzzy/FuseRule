@@ -7,6 +7,7 @@ pub struct Rule {
     pub predicate: String, // SQL-like expression: "price > 100 AND volume < 50"
     pub action: String,
     pub window_seconds: Option<u64>,
+    pub version: u32,
 }
 
 #[derive(Debug, Clone)]

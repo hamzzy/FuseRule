@@ -336,6 +336,7 @@ dependencies = [
  "datafusion",
  "env_logger",
  "futures",
+ "lazy_static",
  "log",
  "reqwest",
  "serde",

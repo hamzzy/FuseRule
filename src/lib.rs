@@ -5,6 +5,7 @@ pub mod evaluator;
 pub mod window;
 pub mod config;
 pub mod server;
+pub mod metrics;
 
 use arrow::record_batch::RecordBatch;
 use crate::rule::Rule;
@@ -22,9 +23,11 @@ use std::sync::Arc;
 pub struct EvaluationTrace {
     pub rule_id: String,
     pub rule_name: String,
+    pub rule_version: u32,
     pub result: PredicateResult,
     pub transition: String, // "None", "Activated", "Deactivated"
     pub action_fired: bool,
+    pub agent_status: Option<String>,
 }
 
 pub struct RuleEngine {
@@ -95,6 +98,7 @@ impl RuleEngine {
                 predicate: r_cfg.predicate,
                 action: r_cfg.action,
                 window_seconds: r_cfg.window_seconds,
+                version: r_cfg.version,
             }).await?;
         }
 
@@ -129,7 +133,7 @@ impl RuleEngine {
         }
 
         let results_with_context = self.evaluator.evaluate_batch(batch, &self.rules, &windowed_data).await?;
-        println!("  Evaluator returned {} results for {} rules", results_with_context.len(), self.rules.len());
+        crate::metrics::METRICS.batches_processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut traces = Vec::new();
 
         for (i, (result, context)) in results_with_context.into_iter().enumerate() {
@@ -137,11 +141,15 @@ impl RuleEngine {
             let transition = self.state.update_result(&rule.id, result).await?;
             
             if transition != RuleTransition::None {
-                println!("  [Engine] Rule '{}' ({}): {:?} -> {:?}", rule.name, rule.id, result, transition);
+                println!("  [Engine] Rule '{}' ({} v{}): {:?} -> {:?}", rule.name, rule.id, rule.version, result, transition);
             }
 
+            let mut agent_status = None;
             let mut action_fired = false;
+
             if let RuleTransition::Activated = transition {
+                action_fired = true;
+                crate::metrics::METRICS.activations_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let activation = Activation {
                     rule_id: rule.id.clone(),
                     rule_name: rule.name.clone(),
@@ -150,20 +158,23 @@ impl RuleEngine {
                 };
                 
                 if let Some(agent) = self.agents.get(&rule.action) {
-                    let agent_clone = Arc::clone(agent);
-                    let activation_clone = activation.clone();
-                    action_fired = true;
-                    tokio::spawn(async move {
-                        if let Err(e) = agent_clone.execute(&activation_clone).await {
-                            eprintln!("Error executing agent: {}", e);
+                    match agent.execute(&activation).await {
+                        Ok(_) => agent_status = Some("success".to_string()),
+                        Err(e) => {
+                            agent_status = Some(format!("failed: {}", e));
+                            crate::metrics::METRICS.agent_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
-                    });
+                    }
+                } else {
+                    agent_status = Some("agent_not_found".to_string());
+                    crate::metrics::METRICS.agent_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
             }
 
             traces.push(EvaluationTrace {
                 rule_id: rule.id.clone(),
                 rule_name: rule.name.clone(),
+                rule_version: rule.version,
                 result,
                 transition: match transition {
                     RuleTransition::None => "None".to_string(),
@@ -171,6 +182,7 @@ impl RuleEngine {
                     RuleTransition::Deactivated => "Deactivated".to_string(),
                 },
                 action_fired,
+                agent_status,
             });
 
             if let Some(buffer) = self.window_buffers.get_mut(&rule.id) {

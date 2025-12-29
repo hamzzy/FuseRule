@@ -19,8 +19,10 @@ rules:
     name: "High Value Transaction"
     predicate: "amount > 1000"
     action: "logger"
+    version: 1
   - id: "r2"
     name: "System Spike"
     predicate: "cpu_usage > 90"
     action: "slack-webhook"
     window_seconds: 10
+    version: 2

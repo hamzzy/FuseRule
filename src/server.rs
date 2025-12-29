@@ -25,19 +25,54 @@ impl FuseRuleServer {
     pub async fn run(self, port: u16) -> anyhow::Result<()> {
         let app = Router::new()
             .route("/status", get(handle_status))
+            .route("/metrics", get(handle_metrics))
             .route("/ingest", post(handle_ingest))
             .with_state(self.engine);
 
         let addr = format!("0.0.0.0:{}", port);
         let listener = tokio::net::TcpListener::bind(&addr).await?;
         println!("🚀 FuseRule Server running on http://{}", addr);
-        axum::serve(listener, app).await?;
+        
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
+        
+        println!("🛑 FuseRule Server shut down gracefully");
         Ok(())
+    }
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
     }
 }
 
 async fn handle_status() -> (StatusCode, Json<Value>) {
     (StatusCode::OK, Json(serde_json::json!({ "status": "active" })))
+}
+
+async fn handle_metrics() -> (StatusCode, Json<Value>) {
+    let snapshot = crate::metrics::METRICS.snapshot();
+    (StatusCode::OK, Json(serde_json::to_value(&snapshot).unwrap()))
 }
 
 async fn handle_ingest(
