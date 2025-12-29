@@ -164,13 +164,23 @@ async fn main() -> Result<()> {
             });
 
             // Wait for all tasks
-            tokio::select! {
-                _ = server_handle => {},
-                _ = async {
-                    for handle in source_handles {
-                        let _ = handle.await;
-                    }
-                } => {},
+            // If there are no source handles, just wait for the server
+            if source_handles.is_empty() {
+                info!("No ingestion sources configured, waiting for server...");
+                server_handle.await?;
+            } else {
+                tokio::select! {
+                    _ = server_handle => {
+                        info!("Server task completed");
+                    },
+                    _ = async {
+                        for handle in source_handles {
+                            let _ = handle.await;
+                        }
+                    } => {
+                        info!("All ingestion sources completed");
+                    },
+                }
             }
         }
     }

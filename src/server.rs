@@ -204,6 +204,7 @@ impl FuseRuleServer {
         let listener = tokio::net::TcpListener::bind(&addr).await?;
         info!("FuseRule Server running on http://{}", addr);
 
+        info!("Starting server with graceful shutdown handler");
         axum::serve(listener, app)
             .with_graceful_shutdown(shutdown_signal(
                 self.engine.clone(),
@@ -661,7 +662,47 @@ async fn handle_rule_state(
 }
 
 async fn shutdown_signal(engine: SharedEngine, config_path: String) {
+    // Add a small delay to ensure logs can flush
+    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+    info!("Setting up shutdown signal handlers");
+    
+    // Spawn reload handler as a background task (it runs forever)
+    #[cfg(unix)]
+    {
+        let engine_clone = engine.clone();
+        let config_path_clone = config_path.clone();
+        tokio::spawn(async move {
+            let mut stream = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+                .expect("failed to install SIGHUP handler");
+            info!("SIGHUP handler installed");
+            // Process SIGHUP signals in a loop - this task runs forever
+            loop {
+                // Wait for SIGHUP signal
+                if stream.recv().await.is_none() {
+                    // Stream closed unexpectedly - this shouldn't happen, but if it does,
+                    // we'll just wait forever to prevent shutdown
+                    warn!("SIGHUP signal stream closed unexpectedly");
+                    std::future::pending::<()>().await;
+                }
+                
+                info!("SIGHUP received, reloading configuration...");
+                match crate::config::FuseRuleConfig::from_file(&config_path_clone) {
+                    Ok(new_config) => {
+                        let mut engine_lock = engine_clone.write().await;
+                        if let Err(e) = engine_lock.reload_from_config(new_config).await {
+                            error!("Failed to reload engine: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to load config file for reload: {}", e);
+                    }
+                }
+            }
+        });
+    }
+
     let ctrl_c = async {
+        info!("Waiting for Ctrl+C signal...");
         tokio::signal::ctrl_c()
             .await
             .expect("failed to install Ctrl+C handler");
@@ -670,43 +711,36 @@ async fn shutdown_signal(engine: SharedEngine, config_path: String) {
 
     #[cfg(unix)]
     let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install signal handler")
-            .recv()
-            .await;
-        info!("Termination signal received (SIGTERM)");
-    };
-
-    #[cfg(unix)]
-    let reload = async {
-        let mut stream = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
-            .expect("failed to install SIGHUP handler");
-        while stream.recv().await.is_some() {
-            info!("SIGHUP received, reloading configuration...");
-            match crate::config::FuseRuleConfig::from_file(&config_path) {
-                Ok(new_config) => {
-                    let mut engine_lock = engine.write().await;
-                    if let Err(e) = engine_lock.reload_from_config(new_config).await {
-                        error!("Failed to reload engine: {}", e);
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to load config file for reload: {}", e);
-                }
+        info!("Waiting for SIGTERM signal...");
+        let mut stream = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler");
+        info!("SIGTERM handler installed, waiting for signal...");
+        // Wait for SIGTERM - this future only completes when we actually receive the signal
+        match stream.recv().await {
+            Some(_) => {
+                info!("Termination signal received (SIGTERM)");
+            }
+            None => {
+                // Stream closed unexpectedly - wait forever to prevent shutdown
+                warn!("SIGTERM signal stream closed unexpectedly - waiting indefinitely");
+                std::future::pending::<()>().await;
             }
         }
     };
 
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
-    #[cfg(not(unix))]
-    let reload = std::future::pending::<()>();
 
+    info!("Entering shutdown signal select loop - server will run until Ctrl+C or SIGTERM");
     tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
-        _ = reload => {},
+        _ = ctrl_c => {
+            info!("Ctrl+C branch selected - shutting down");
+        },
+        _ = terminate => {
+            info!("SIGTERM branch selected - shutting down");
+        },
     }
+    info!("Shutdown signal handler completed");
 }
 
 async fn handle_status() -> (StatusCode, Json<Value>) {
@@ -790,17 +824,33 @@ async fn handle_ingest(
     debug!(request_id = %request_id, "Received ingest request");
 
     // 1. Convert JSON to Arrow RecordBatch
-    let json_data = match serde_json::to_vec(&payload) {
-        Ok(data) => data,
-        Err(e) => {
-            error!(request_id = %request_id, error = %e, "Failed to serialize payload");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": format!("Invalid JSON payload: {}", e),
-                    "request_id": request_id
-                })),
-            );
+    // arrow-json ReaderBuilder expects NDJSON format (one JSON object per line)
+    // or a single object, not a JSON array. Convert arrays to NDJSON format.
+    let json_data = if payload.is_array() {
+        // Convert array to NDJSON: each object on a newline
+        let array = payload.as_array().unwrap();
+        let mut ndjson = String::new();
+        for (i, item) in array.iter().enumerate() {
+            if i > 0 {
+                ndjson.push('\n');
+            }
+            ndjson.push_str(&serde_json::to_string(item).unwrap_or_default());
+        }
+        ndjson.into_bytes()
+    } else {
+        // Single object - serialize as-is
+        match serde_json::to_vec(&payload) {
+            Ok(data) => data,
+            Err(e) => {
+                error!(request_id = %request_id, error = %e, "Failed to serialize payload");
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("Invalid JSON payload: {}", e),
+                        "request_id": request_id
+                    })),
+                );
+            }
         }
     };
     let cursor = Cursor::new(json_data);
