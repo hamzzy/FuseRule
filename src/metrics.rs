@@ -4,7 +4,7 @@ use std::sync::Mutex;
 
 // Simple histogram for latency tracking
 #[derive(Debug)]
-pub(crate) struct Histogram {
+pub struct Histogram {
     buckets: Vec<(f64, AtomicU64)>, // (upper_bound, count)
 }
 

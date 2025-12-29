@@ -28,6 +28,27 @@ impl DataFusionEvaluator {
             ctx: SessionContext::new(),
         }
     }
+    
+    /// Check if a predicate string contains aggregate functions
+    /// This is a simple heuristic-based check - looks for common aggregate function names
+    fn contains_aggregates(predicate: &str) -> bool {
+        // Normalize to uppercase for case-insensitive matching
+        let upper = predicate.to_uppercase();
+        
+        // Check for common aggregate functions
+        // This is a heuristic - in production, you might want a more sophisticated parser
+        upper.contains("AVG(") 
+            || upper.contains("COUNT(")
+            || upper.contains("SUM(")
+            || upper.contains("MIN(")
+            || upper.contains("MAX(")
+            || upper.contains("STDDEV(")
+            || upper.contains("VARIANCE(")
+            || upper.contains("STDDEV_POP(")
+            || upper.contains("STDDEV_SAMP(")
+            || upper.contains("VAR_POP(")
+            || upper.contains("VAR_SAMP(")
+    }
 }
 
 #[derive(Clone)]
@@ -35,6 +56,7 @@ pub struct CompiledRuleEdge {
     pub rule: Rule,
     pub logical_expr: datafusion::logical_expr::Expr, // Pre-compiled logical expression - avoids re-parsing SQL!
     pub compiled_sql: String, // Pre-compiled SQL string (for debugging/logging)
+    pub has_aggregates: bool, // True if expression contains aggregate functions (AVG, COUNT, SUM, etc.)
 }
 
 #[async_trait]
@@ -49,6 +71,10 @@ impl RuleEvaluator for DataFusionEvaluator {
             .parse_sql_expr(&rule.predicate, &df_schema)
             .context("Failed to parse rule predicate")?;
 
+        // Detect if expression contains aggregate functions
+        // Use string-based heuristic for simplicity and reliability
+        let has_aggregates = Self::contains_aggregates(&rule.predicate);
+
         // Pre-compile SQL string for debugging/logging
         let compiled_sql = format!("SELECT ({}) as match_result", rule.predicate);
         
@@ -56,6 +82,7 @@ impl RuleEvaluator for DataFusionEvaluator {
             rule,
             logical_expr,
             compiled_sql,
+            has_aggregates,
         })
     }
 
@@ -113,17 +140,30 @@ impl RuleEvaluator for DataFusionEvaluator {
             let df = self.ctx.read_batches(vec![combined_batch.clone()])?;
             self.ctx.register_table(&table_name, df.into_view())?;
 
-            // Build query using pre-compiled logical expression
-            // Create a SELECT with the pre-compiled expression (avoids re-parsing SQL!)
-            let select_expr = vec![rule.logical_expr.clone().alias("match_result")];
-            let select_df = self.ctx
-                .table(&table_name)
-                .await?
-                .select(select_expr)?;
-            
-            let result_batches = select_df.collect().await?;
+            let result_batches = if rule.has_aggregates {
+                // For aggregate expressions (e.g., "AVG(price) > 100"), execute as aggregate query
+                // This aggregates over the entire window and returns a single boolean result
+                let select_expr = vec![rule.logical_expr.clone().alias("match_result")];
+                let select_df = self.ctx
+                    .table(&table_name)
+                    .await?
+                    .select(select_expr)?;
+                
+                select_df.collect().await?
+            } else {
+                // For non-aggregate expressions, evaluate per-row
+                let select_expr = vec![rule.logical_expr.clone().alias("match_result")];
+                let select_df = self.ctx
+                    .table(&table_name)
+                    .await?
+                    .select(select_expr)?;
+                
+                select_df.collect().await?
+            };
 
-            // Check if any row matches (for boolean expressions)
+            // Check if predicate is true
+            // For aggregates: result is a single row with boolean value
+            // For non-aggregates: result is per-row, check if any row matches
             let mut is_true = false;
             let mut matched_rows: Vec<usize> = Vec::new();
             
@@ -133,10 +173,20 @@ impl RuleEvaluator for DataFusionEvaluator {
                     .as_any()
                     .downcast_ref::<arrow::array::BooleanArray>();
                 if let Some(bool_col) = col {
-                    for row_idx in 0..bool_col.len() {
-                        if !bool_col.is_null(row_idx) && bool_col.value(row_idx) {
+                    if rule.has_aggregates {
+                        // Aggregate query returns single row - check if it's true
+                        if bool_col.len() > 0 && !bool_col.is_null(0) && bool_col.value(0) {
                             is_true = true;
-                            matched_rows.push(row_idx);
+                            // For aggregates, all rows in the window "match" conceptually
+                            matched_rows = (0..combined_batch.num_rows()).collect();
+                        }
+                    } else {
+                        // Per-row evaluation - check each row
+                        for row_idx in 0..bool_col.len() {
+                            if !bool_col.is_null(row_idx) && bool_col.value(row_idx) {
+                                is_true = true;
+                                matched_rows.push(row_idx);
+                            }
                         }
                     }
                 }
