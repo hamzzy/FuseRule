@@ -1,0 +1,20 @@
+engine:
+  persistence_path: "fuserule_state"
+
+agents:
+  - name: "logger"
+    type: "logger"
+  - name: "slack-webhook"
+    type: "webhook"
+    url: "http://127.0.0.1:8080/webhook"
+
+rules:
+  - id: "r1"
+    name: "High Value Transaction"
+    predicate: "amount > 1000"
+    action: "logger"
+  - id: "r2"
+    name: "System Spike"
+    predicate: "cpu_usage > 90"
+    action: "slack-webhook"
+    window_seconds: 10

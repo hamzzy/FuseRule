@@ -1,0 +1,88 @@
+use arrow_rule_agent::RuleEngine;
+use arrow_rule_agent::config::{FuseRuleConfig, RuleConfig};
+use arrow_rule_agent::rule::Rule;
+use arrow::record_batch::RecordBatch;
+use arrow::array::{Float64Array, Int32Array};
+use arrow::datatypes::{Schema, Field, DataType};
+use std::sync::Arc;
+use anyhow::Result;
+use tokio::net::TcpListener;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    env_logger::init();
+    println!("🚀 Starting FuseRule V4: Dynamic Config & Webhook Demo");
+
+    // 1. Start a mock webhook server in the background
+    tokio::spawn(async move {
+        let listener = TcpListener::bind("127.0.0.1:8080").await.unwrap();
+        println!("🛰️ Mock Webhook Server listening on http://127.0.0.1:8080/webhook");
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            tokio::spawn(async move {
+                let mut buf = [0; 1024];
+                let n = socket.read(&mut buf).await.unwrap();
+                let request = String::from_utf8_lossy(&buf[..n]);
+                if request.contains("POST") {
+                    println!("\n🔔 [Mock Server] Received Webhook Notification!");
+                    let body = request.split("\r\n\r\n").last().unwrap_or("");
+                    println!("📦 Payload: {}", body);
+                    // Send 200 OK
+                    let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").await;
+                }
+            });
+        }
+    });
+
+    // 2. Load Config from YAML
+    let config = FuseRuleConfig::from_file("fuse_rule_config.yaml")?;
+    println!("📖 Config loaded: {} rules, {} agents", config.rules.len(), config.agents.len());
+
+    // 3. Initialize Engine
+    let mut engine = RuleEngine::from_config(config.clone())?;
+
+    // 4. Setup Data Schema (for the rules in yaml)
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("amount", DataType::Int32, false),
+        Field::new("cpu_usage", DataType::Float64, false),
+    ]));
+
+    // Manually add rules from config into the engine (we could automate this in from_config too)
+    for r_cfg in &config.rules {
+        engine.add_rule(Rule {
+            id: r_cfg.id.clone(),
+            name: r_cfg.name.clone(),
+            predicate: r_cfg.predicate.clone(),
+            action: r_cfg.action.clone(),
+            window_seconds: r_cfg.window_seconds,
+        }, &schema)?;
+    }
+
+    // 5. Simulate Data
+    println!("\n📥 Batch 1: High CPU usage (r2: System Spike)");
+    let batch1 = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![500, 200])),
+            Arc::new(Float64Array::from(vec![95.0, 92.0])),
+        ],
+    )?;
+    engine.process_batch(&batch1).await?;
+
+    println!("\n📥 Batch 2: High Amount (r1: High Value Transaction)");
+    let batch2 = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1500, 10])),
+            Arc::new(Float64Array::from(vec![40.0, 10.0])),
+        ],
+    )?;
+    engine.process_batch(&batch2).await?;
+
+    // Wait a bit for async agents to finish
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+    println!("\n✅ V4 Demo Completed");
+    Ok(())
+}
