@@ -5,11 +5,7 @@ use datafusion::prelude::*;
 use datafusion::logical_expr::Expr;
 use crate::rule::Rule;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum PredicateResult {
-    True,
-    False,
-}
+use crate::state::PredicateResult;
 
 pub struct DataFusionEvaluator {
     ctx: SessionContext,

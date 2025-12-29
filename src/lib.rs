@@ -1,26 +1,28 @@
 pub mod rule;
+pub mod state;
 pub mod agent;
 pub mod evaluator;
 
 use arrow::record_batch::RecordBatch;
 use crate::rule::Rule;
+use crate::state::{EngineState, RuleTransition};
 use crate::agent::Activation;
-use crate::evaluator::{DataFusionEvaluator, CompiledPhysicalRule, PredicateResult};
+use crate::evaluator::{DataFusionEvaluator, CompiledPhysicalRule};
 use anyhow::Result;
-use std::collections::HashMap;
+use std::path::Path;
 
 pub struct RuleEngine {
     evaluator: DataFusionEvaluator,
     rules: Vec<CompiledPhysicalRule>,
-    last_results: HashMap<String, PredicateResult>,
+    state: EngineState,
 }
 
 impl RuleEngine {
-    pub fn new() -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(persistence_path: P) -> Result<Self> {
         Ok(Self {
             evaluator: DataFusionEvaluator::new(),
             rules: Vec::new(),
-            last_results: HashMap::new(),
+            state: EngineState::new(persistence_path)?,
         })
     }
 
@@ -36,9 +38,9 @@ impl RuleEngine {
 
         for (i, (result, context)) in results_with_context.into_iter().enumerate() {
             let rule = &self.rules[i].rule;
-            let last_result = self.last_results.get(&rule.id).copied().unwrap_or(PredicateResult::False);
-            
-            if last_result == PredicateResult::False && result == PredicateResult::True {
+            let transition = self.state.update_rule(&rule.id, result)?;
+
+            if let RuleTransition::Activated = transition {
                 activations.push(Activation {
                     rule_id: rule.id.clone(),
                     rule_name: rule.name.clone(),
@@ -46,8 +48,6 @@ impl RuleEngine {
                     context,
                 });
             }
-            
-            self.last_results.insert(rule.id.clone(), result);
         }
 
         Ok(activations)
