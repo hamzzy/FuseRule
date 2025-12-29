@@ -9,7 +9,7 @@ pub struct ValidateArgs {
     /// Path to configuration file
     #[arg(short, long)]
     config: String,
-    
+
     /// Rule predicate to validate
     #[arg(short, long)]
     predicate: Option<String>,
@@ -17,13 +17,12 @@ pub struct ValidateArgs {
 
 pub async fn validate_rule(config_path: &str, predicate: Option<&str>) -> Result<()> {
     let config = FuseRuleConfig::from_file(config_path)?;
-    
+
     if let Some(pred) = predicate {
         // Validate specific predicate
         let evaluator = DataFusionEvaluator::new();
-        let schema = crate::lib::RuleEngine::from_config(config.clone())
-            .map(|e| e.schema())?;
-        
+        let schema = crate::lib::RuleEngine::from_config(config.clone()).map(|e| e.schema())?;
+
         let test_rule = Rule {
             id: "test".to_string(),
             name: "Test Rule".to_string(),
@@ -33,7 +32,7 @@ pub async fn validate_rule(config_path: &str, predicate: Option<&str>) -> Result
             version: 1,
             enabled: true,
         };
-        
+
         match evaluator.compile(test_rule, &schema) {
             Ok(_) => {
                 println!("✅ Predicate is valid");
@@ -49,7 +48,7 @@ pub async fn validate_rule(config_path: &str, predicate: Option<&str>) -> Result
         let evaluator = DataFusionEvaluator::new();
         let engine = crate::lib::RuleEngine::from_config(config.clone()).await?;
         let schema = engine.schema();
-        
+
         let mut all_valid = true;
         for rule_cfg in &config.rules {
             let rule = Rule {
@@ -61,7 +60,7 @@ pub async fn validate_rule(config_path: &str, predicate: Option<&str>) -> Result
                 version: rule_cfg.version,
                 enabled: rule_cfg.enabled,
             };
-            
+
             match evaluator.compile(rule.clone(), &schema) {
                 Ok(compiled) => {
                     println!("✅ Rule '{}' ({}): Valid", rule.name, rule.id);
@@ -75,7 +74,7 @@ pub async fn validate_rule(config_path: &str, predicate: Option<&str>) -> Result
                 }
             }
         }
-        
+
         if all_valid {
             println!("\n✅ All rules are valid");
             Ok(())
@@ -84,4 +83,3 @@ pub async fn validate_rule(config_path: &str, predicate: Option<&str>) -> Result
         }
     }
 }
-

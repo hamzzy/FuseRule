@@ -1,6 +1,6 @@
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow_rule_agent::evaluator::DataFusionEvaluator;
 use arrow_rule_agent::rule::Rule;
-use arrow::datatypes::{DataType, Field, Schema};
 use std::sync::Arc;
 
 #[test]
@@ -28,9 +28,7 @@ fn test_predicate_compilation() {
 #[test]
 fn test_aggregate_detection() {
     let evaluator = DataFusionEvaluator::new();
-    let schema = Schema::new(vec![
-        Field::new("price", DataType::Float64, true),
-    ]);
+    let schema = Schema::new(vec![Field::new("price", DataType::Float64, true)]);
 
     let rule_with_agg = Rule {
         id: "test_agg".to_string(),
@@ -50,9 +48,7 @@ fn test_aggregate_detection() {
 #[test]
 fn test_invalid_predicate() {
     let evaluator = DataFusionEvaluator::new();
-    let schema = Schema::new(vec![
-        Field::new("price", DataType::Float64, true),
-    ]);
+    let schema = Schema::new(vec![Field::new("price", DataType::Float64, true)]);
 
     let rule = Rule {
         id: "test".to_string(),
@@ -67,4 +63,3 @@ fn test_invalid_predicate() {
     let compiled = evaluator.compile(rule, &Arc::new(schema));
     assert!(compiled.is_err());
 }
-

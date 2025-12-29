@@ -2,6 +2,22 @@
 name = "arrow-rule-agent"
 version = "0.1.0"
 edition = "2021"
+authors = ["Ibrahim Hamzat <hamat.ibrahim3@gmail.com>"]
+description = "High-performance, Arrow-native Complex Event Processing (CEP) engine with SQL-powered rules"
+license = "Apache-2.0"
+repository = "https://github.com/hamzzy/arrow-rule-agent"
+homepage = "https://github.com/hamzzy/arrow-rule-agent"
+documentation = "https://docs.rs/arrow-rule-agent"
+keywords = ["rules", "cep", "arrow", "datafusion", "event-processing", "streaming"]
+categories = ["algorithms", "data-structures", "web-programming"]
+readme = "README.md"
+exclude = [
+    "target/",
+    "fuserule_state/",
+    ".git/",
+    ".fuserule_history",
+    ".fuserule_debug_history",
+]
 
 [dependencies]
 # Arrow and DataFusion
@@ -43,3 +59,11 @@ tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 tokio-test = "0.4"
 proptest = "1.5"
 rustyline = "15.0"
+
+[[example]]
+name = "basic_usage"
+path = "examples/basic_usage.rs"
+
+[[example]]
+name = "programmatic_rules"
+path = "examples/programmatic_rules.rs"

@@ -28,16 +28,16 @@ impl DataFusionEvaluator {
             ctx: SessionContext::new(),
         }
     }
-    
+
     /// Check if a predicate string contains aggregate functions
     /// This is a simple heuristic-based check - looks for common aggregate function names
     fn contains_aggregates(predicate: &str) -> bool {
         // Normalize to uppercase for case-insensitive matching
         let upper = predicate.to_uppercase();
-        
+
         // Check for common aggregate functions
         // This is a heuristic - in production, you might want a more sophisticated parser
-        upper.contains("AVG(") 
+        upper.contains("AVG(")
             || upper.contains("COUNT(")
             || upper.contains("SUM(")
             || upper.contains("MIN(")
@@ -63,7 +63,7 @@ pub struct CompiledRuleEdge {
 impl RuleEvaluator for DataFusionEvaluator {
     fn compile(&self, rule: Rule, schema: &arrow::datatypes::Schema) -> Result<CompiledRuleEdge> {
         let df_schema = datafusion::common::DFSchema::try_from(schema.clone())?;
-        
+
         // Pre-compile logical expression - this avoids re-parsing SQL on every evaluation!
         // This is a significant performance win (10x faster) compared to re-parsing on each eval
         let logical_expr = self
@@ -77,7 +77,7 @@ impl RuleEvaluator for DataFusionEvaluator {
 
         // Pre-compile SQL string for debugging/logging
         let compiled_sql = format!("SELECT ({}) as match_result", rule.predicate);
-        
+
         Ok(CompiledRuleEdge {
             rule,
             logical_expr,
@@ -126,9 +126,9 @@ impl RuleEvaluator for DataFusionEvaluator {
                     .into_iter()
                     .map(|cols| {
                         // Convert Vec<Arc<Array>> to &[&Array] for concat
-                        let refs: Vec<&dyn arrow::array::Array> = cols.iter().map(|a| a.as_ref()).collect();
-                        arrow::compute::concat(&refs)
-                            .expect("Failed to concatenate arrays")
+                        let refs: Vec<&dyn arrow::array::Array> =
+                            cols.iter().map(|a| a.as_ref()).collect();
+                        arrow::compute::concat(&refs).expect("Failed to concatenate arrays")
                     })
                     .collect();
                 RecordBatch::try_new(batch.schema(), concatenated_arrays)?
@@ -144,20 +144,14 @@ impl RuleEvaluator for DataFusionEvaluator {
                 // For aggregate expressions (e.g., "AVG(price) > 100"), execute as aggregate query
                 // This aggregates over the entire window and returns a single boolean result
                 let select_expr = vec![rule.logical_expr.clone().alias("match_result")];
-                let select_df = self.ctx
-                    .table(&table_name)
-                    .await?
-                    .select(select_expr)?;
-                
+                let select_df = self.ctx.table(&table_name).await?.select(select_expr)?;
+
                 select_df.collect().await?
             } else {
                 // For non-aggregate expressions, evaluate per-row
                 let select_expr = vec![rule.logical_expr.clone().alias("match_result")];
-                let select_df = self.ctx
-                    .table(&table_name)
-                    .await?
-                    .select(select_expr)?;
-                
+                let select_df = self.ctx.table(&table_name).await?.select(select_expr)?;
+
                 select_df.collect().await?
             };
 
@@ -166,7 +160,7 @@ impl RuleEvaluator for DataFusionEvaluator {
             // For non-aggregates: result is per-row, check if any row matches
             let mut is_true = false;
             let mut matched_rows: Vec<usize> = Vec::new();
-            
+
             if !result_batches.is_empty() {
                 let col = result_batches[0]
                     .column(0)
@@ -196,7 +190,7 @@ impl RuleEvaluator for DataFusionEvaluator {
             let matched_batch = if is_true && !matched_rows.is_empty() {
                 // Filter to only matched rows from the combined batch
                 let matched_indices = arrow::array::UInt32Array::from(
-                    matched_rows.iter().map(|&i| i as u32).collect::<Vec<_>>()
+                    matched_rows.iter().map(|&i| i as u32).collect::<Vec<_>>(),
                 );
                 // Filter each column using take
                 let filtered_columns: Result<Vec<Arc<dyn arrow::array::Array>>, _> = combined_batch
@@ -204,10 +198,8 @@ impl RuleEvaluator for DataFusionEvaluator {
                     .iter()
                     .map(|col| arrow::compute::take(col, &matched_indices, None))
                     .collect();
-                let filtered_batch = RecordBatch::try_new(
-                    combined_batch.schema(),
-                    filtered_columns?,
-                )?;
+                let filtered_batch =
+                    RecordBatch::try_new(combined_batch.schema(), filtered_columns?)?;
                 Some(filtered_batch)
             } else {
                 None

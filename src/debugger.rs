@@ -2,10 +2,10 @@ use crate::config::FuseRuleConfig;
 use crate::evaluator::{CompiledRuleEdge, DataFusionEvaluator};
 use crate::rule::Rule;
 use crate::state::PredicateResult;
+use anyhow::{Context, Result};
 use arrow::array::{Float64Array, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use anyhow::{Context, Result};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::sync::Arc;
@@ -51,7 +51,7 @@ impl RuleDebugger {
                 Ok(line) => {
                     let _ = rl.add_history_entry(line.as_str());
                     let trimmed = line.trim();
-                    
+
                     if trimmed.is_empty() {
                         continue;
                     }
@@ -131,7 +131,7 @@ impl RuleDebugger {
         }
 
         let config = FuseRuleConfig::from_file(config_path)?;
-        
+
         // Update schema from config
         let mut fields = Vec::new();
         for f in config.schema {
@@ -147,7 +147,7 @@ impl RuleDebugger {
             fields.push(Field::new(f.name, dt, true));
         }
         self.schema = Arc::new(Schema::new(fields));
-        
+
         println!("✅ Loaded config from: {}", config_path);
         println!("   Rules: {}", config.rules.len());
         println!("   Schema fields: {}", self.schema.fields().len());
@@ -169,8 +169,8 @@ impl RuleDebugger {
         use arrow_json::ReaderBuilder;
         use std::io::Cursor;
 
-        let json_value: serde_json::Value = serde_json::from_str(json_str)
-            .context("Failed to parse JSON")?;
+        let json_value: serde_json::Value =
+            serde_json::from_str(json_str).context("Failed to parse JSON")?;
 
         let json_data = serde_json::to_vec(&json_value)?;
         let cursor = Cursor::new(json_data);
@@ -218,7 +218,8 @@ impl RuleDebugger {
         // Parse predicate if provided, otherwise use default
         let parts: Vec<&str> = rule_id.splitn(2, ' ').collect();
         let rule_id = parts[0];
-        let predicate = parts.get(1)
+        let predicate = parts
+            .get(1)
             .map(|s| s.trim_matches('\'').trim_matches('"').to_string())
             .unwrap_or_else(|| "price > 100".to_string());
 
@@ -255,17 +256,21 @@ impl RuleDebugger {
 
         // Evaluate
         println!("⚙️  Evaluating predicate...");
-        let results = self.evaluator
+        let results = self
+            .evaluator
             .evaluate_batch(batch, &[compiled], &[vec![]])
             .await?;
 
         let result = results[0].0;
         println!("📊 Result: {:?}", result);
-        println!("   {}", if matches!(result, PredicateResult::True) {
-            "✅ Predicate is TRUE"
-        } else {
-            "❌ Predicate is FALSE"
-        });
+        println!(
+            "   {}",
+            if matches!(result, PredicateResult::True) {
+                "✅ Predicate is TRUE"
+            } else {
+                "❌ Predicate is FALSE"
+            }
+        );
 
         if let Some(matched_batch) = &results[0].1 {
             println!("   Matched rows: {}", matched_batch.num_rows());
@@ -320,7 +325,10 @@ impl RuleDebugger {
             }
         };
 
-        println!("🚀 Running evaluation on batch ({} rows)...", batch.num_rows());
+        println!(
+            "🚀 Running evaluation on batch ({} rows)...",
+            batch.num_rows()
+        );
         println!("   (This is a simplified run - use 'step' for detailed debugging)");
 
         Ok(())
@@ -340,4 +348,3 @@ impl RuleDebugger {
         println!("  quit/exit      - Exit debugger");
     }
 }
-

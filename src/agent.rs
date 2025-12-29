@@ -31,10 +31,15 @@ impl Agent for LoggerAgent {
             .as_ref()
             .map(|b| b.num_rows())
             .unwrap_or(0);
-        
+
         // Log matched rows data for debugging
         if let Some(batch) = &activation.context {
-            let field_names: Vec<String> = batch.schema().fields().iter().map(|f| f.name().clone()).collect();
+            let field_names: Vec<String> = batch
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.name().clone())
+                .collect();
             debug!(
                 agent = self.name(),
                 rule_id = %activation.rule_id,
@@ -43,7 +48,7 @@ impl Agent for LoggerAgent {
                 "Agent firing with matched data"
             );
         }
-        
+
         info!(
             agent = self.name(),
             action = %activation.action,
@@ -70,7 +75,7 @@ impl WebhookAgent {
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("Failed to create HTTP client");
-        
+
         // Compile Handlebars template if provided
         let compiled_template = template.and_then(|t| {
             let mut handlebars = handlebars::Handlebars::new();
@@ -81,7 +86,7 @@ impl WebhookAgent {
                 None
             }
         });
-        
+
         Self {
             url,
             client,
@@ -120,7 +125,9 @@ impl Agent for WebhookAgent {
                     // Convert array value to JSON (simplified - handles common types)
                     let value = match array.data_type() {
                         arrow::datatypes::DataType::Int32 => {
-                            if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Int32Array>() {
+                            if let Some(arr) =
+                                array.as_any().downcast_ref::<arrow::array::Int32Array>()
+                            {
                                 if !arr.is_null(row_idx) {
                                     serde_json::Value::Number(arr.value(row_idx).into())
                                 } else {
@@ -131,7 +138,9 @@ impl Agent for WebhookAgent {
                             }
                         }
                         arrow::datatypes::DataType::Int64 => {
-                            if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Int64Array>() {
+                            if let Some(arr) =
+                                array.as_any().downcast_ref::<arrow::array::Int64Array>()
+                            {
                                 if !arr.is_null(row_idx) {
                                     serde_json::Value::Number(arr.value(row_idx).into())
                                 } else {
@@ -142,11 +151,13 @@ impl Agent for WebhookAgent {
                             }
                         }
                         arrow::datatypes::DataType::Float64 => {
-                            if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Float64Array>() {
+                            if let Some(arr) =
+                                array.as_any().downcast_ref::<arrow::array::Float64Array>()
+                            {
                                 if !arr.is_null(row_idx) {
                                     serde_json::Value::Number(
                                         serde_json::Number::from_f64(arr.value(row_idx))
-                                            .unwrap_or_else(|| serde_json::Number::from(0))
+                                            .unwrap_or_else(|| serde_json::Number::from(0)),
                                     )
                                 } else {
                                     serde_json::Value::Null
@@ -156,7 +167,9 @@ impl Agent for WebhookAgent {
                             }
                         }
                         arrow::datatypes::DataType::Boolean => {
-                            if let Some(arr) = array.as_any().downcast_ref::<arrow::array::BooleanArray>() {
+                            if let Some(arr) =
+                                array.as_any().downcast_ref::<arrow::array::BooleanArray>()
+                            {
                                 if !arr.is_null(row_idx) {
                                     serde_json::Value::Bool(arr.value(row_idx))
                                 } else {
@@ -167,7 +180,9 @@ impl Agent for WebhookAgent {
                             }
                         }
                         arrow::datatypes::DataType::Utf8 => {
-                            if let Some(arr) = array.as_any().downcast_ref::<arrow::array::StringArray>() {
+                            if let Some(arr) =
+                                array.as_any().downcast_ref::<arrow::array::StringArray>()
+                            {
                                 if !arr.is_null(row_idx) {
                                     serde_json::Value::String(arr.value(row_idx).to_string())
                                 } else {
@@ -183,12 +198,14 @@ impl Agent for WebhookAgent {
                 }
                 matched_data.push(serde_json::Value::Object(row));
             }
-            context.as_object_mut()
-                .unwrap()
-                .insert("matched_data".to_string(), serde_json::Value::Array(matched_data.clone()));
-            context.as_object_mut()
-                .unwrap()
-                .insert("matched_rows".to_string(), serde_json::Value::Array(matched_data));
+            context.as_object_mut().unwrap().insert(
+                "matched_data".to_string(),
+                serde_json::Value::Array(matched_data.clone()),
+            );
+            context.as_object_mut().unwrap().insert(
+                "matched_rows".to_string(),
+                serde_json::Value::Array(matched_data),
+            );
         }
 
         // Render payload using template or default JSON
@@ -197,9 +214,8 @@ impl Agent for WebhookAgent {
             match template.render("webhook", &context) {
                 Ok(rendered) => {
                     // Try to parse as JSON, fallback to string
-                    serde_json::from_str(&rendered).unwrap_or_else(|_| {
-                        serde_json::json!({ "text": rendered })
-                    })
+                    serde_json::from_str(&rendered)
+                        .unwrap_or_else(|_| serde_json::json!({ "text": rendered }))
                 }
                 Err(e) => {
                     // Template rendering failed, fallback to default JSON

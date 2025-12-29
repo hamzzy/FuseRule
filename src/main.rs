@@ -33,7 +33,7 @@ enum Commands {
         /// Path to the configuration file
         #[arg(short, long, default_value = "fuse_rule_config.yaml")]
         config: String,
-        
+
         /// Specific predicate to validate (optional)
         #[arg(short, long)]
         predicate: Option<String>,
@@ -97,14 +97,14 @@ async fn main() -> Result<()> {
             let rate_limit = config_data.engine.ingest_rate_limit;
             let api_keys = config_data.engine.api_keys.clone();
             let shared_engine = Arc::new(RwLock::new(engine));
-            
+
             let server = FuseRuleServer::new(
                 shared_engine.clone(),
                 config.to_string(),
                 rate_limit,
                 api_keys,
             );
-            
+
             // 5. Start data ingestion sources (Kafka, WebSocket)
             let mut source_handles = Vec::new();
             for source in &config_data.sources {
@@ -115,7 +115,10 @@ async fn main() -> Result<()> {
                         group_id,
                         auto_commit,
                     } => {
-                        info!("Starting Kafka ingestion: topic={}, group_id={}", topic, group_id);
+                        info!(
+                            "Starting Kafka ingestion: topic={}, group_id={}",
+                            topic, group_id
+                        );
                         let kafka = KafkaIngestion::new(
                             shared_engine.clone(),
                             brokers.clone(),
@@ -130,8 +133,14 @@ async fn main() -> Result<()> {
                         });
                         source_handles.push(handle);
                     }
-                    SourceConfig::WebSocket { bind, max_connections } => {
-                        info!("Starting WebSocket ingestion: bind={}, max_connections={}", bind, max_connections);
+                    SourceConfig::WebSocket {
+                        bind,
+                        max_connections,
+                    } => {
+                        info!(
+                            "Starting WebSocket ingestion: bind={}, max_connections={}",
+                            bind, max_connections
+                        );
                         let ws = WebSocketIngestion::new(
                             shared_engine.clone(),
                             bind.clone(),
@@ -146,14 +155,14 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-            
+
             // Start HTTP server and wait for it
             let server_handle = tokio::spawn(async move {
                 if let Err(e) = server.run(*port).await {
                     tracing::error!(error = %e, "HTTP server error");
                 }
             });
-            
+
             // Wait for all tasks
             tokio::select! {
                 _ = server_handle => {},

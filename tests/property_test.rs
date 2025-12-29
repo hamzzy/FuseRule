@@ -1,8 +1,8 @@
-use arrow_rule_agent::evaluator::DataFusionEvaluator;
-use arrow_rule_agent::rule::Rule;
-use arrow::array::{Float64Array, Int32Array, BooleanArray};
+use arrow::array::{BooleanArray, Float64Array, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use arrow_rule_agent::evaluator::DataFusionEvaluator;
+use arrow_rule_agent::rule::Rule;
 use proptest::prelude::*;
 use std::sync::Arc;
 
@@ -200,7 +200,7 @@ proptest! {
         // Property: AVG(price) > threshold should be true if avg_price > threshold
         let expected = avg_price > threshold;
         let actual = matches!(results[0].0, arrow_rule_agent::state::PredicateResult::True);
-        
+
         // Note: Due to floating point precision, we allow small differences
         prop_assert_eq!(
             expected, actual,
@@ -209,4 +209,3 @@ proptest! {
         );
     }
 }
-

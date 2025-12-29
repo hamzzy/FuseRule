@@ -11,7 +11,9 @@ pub struct Histogram {
 impl Histogram {
     fn new() -> Self {
         // Standard Prometheus buckets: 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10
-        let bounds = vec![0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0];
+        let bounds = vec![
+            0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+        ];
         Self {
             buckets: bounds.into_iter().map(|b| (b, AtomicU64::new(0))).collect(),
         }
@@ -48,10 +50,7 @@ impl Histogram {
                 name, bound, labels, count
             ));
         }
-        output.push_str(&format!(
-            "{}{{le=\"+Inf\",{}}} {}\n",
-            name, labels, total
-        ));
+        output.push_str(&format!("{}{{le=\"+Inf\",{}}} {}\n", name, labels, total));
         output
     }
 }
@@ -84,11 +83,11 @@ impl SystemMetrics {
             agent_execution_duration: Mutex::new(HashMap::new()),
         }
     }
-    
+
     pub fn record_evaluation_duration(&self, duration_secs: f64) {
         self.evaluation_duration.record(duration_secs);
     }
-    
+
     pub fn record_agent_execution_duration(&self, agent_name: &str, duration_secs: f64) {
         let mut map = self.agent_execution_duration.lock().unwrap();
         let hist = map
@@ -96,29 +95,29 @@ impl SystemMetrics {
             .or_insert_with(|| Histogram::new());
         hist.record(duration_secs);
     }
-    
+
     pub fn record_rule_evaluation(&self, rule_id: &str) {
         let mut map = self.rule_evaluations.lock().unwrap();
         map.entry(rule_id.to_string())
             .or_insert_with(|| AtomicU64::new(0))
             .fetch_add(1, Ordering::Relaxed);
     }
-    
+
     pub fn record_rule_activation(&self, rule_id: &str) {
         let mut map = self.rule_activations.lock().unwrap();
         map.entry(rule_id.to_string())
             .or_insert_with(|| AtomicU64::new(0))
             .fetch_add(1, Ordering::Relaxed);
     }
-    
+
     pub fn record_deactivation(&self) {
         self.deactivations_total.fetch_add(1, Ordering::Relaxed);
     }
-    
+
     pub fn record_evaluation_error(&self) {
         self.evaluation_errors.fetch_add(1, Ordering::Relaxed);
     }
-    
+
     pub fn record_rule_evaluation_duration(&self, rule_id: &str, duration_secs: f64) {
         let mut map = self.rule_evaluation_duration.lock().unwrap();
         let hist = map
@@ -142,7 +141,7 @@ impl SystemMetrics {
             .iter()
             .map(|(k, v)| (k.clone(), v.load(Ordering::Relaxed)))
             .collect();
-        
+
         MetricsSnapshot {
             batches_processed: self.batches_processed.load(Ordering::Relaxed),
             activations_total: self.activations_total.load(Ordering::Relaxed),
@@ -178,7 +177,7 @@ impl SystemMetrics {
             snapshot.agent_failures,
             snapshot.evaluation_errors
         );
-        
+
         // Add per-rule metrics
         output.push_str("# HELP fuserule_rule_evaluations_total Total evaluations per rule.\n");
         output.push_str("# TYPE fuserule_rule_evaluations_total counter\n");
@@ -188,7 +187,7 @@ impl SystemMetrics {
                 rule_id, count
             ));
         }
-        
+
         output.push_str("# HELP fuserule_rule_activations_total Total activations per rule.\n");
         output.push_str("# TYPE fuserule_rule_activations_total counter\n");
         for (rule_id, count) in &snapshot.rule_activations {
@@ -197,30 +196,31 @@ impl SystemMetrics {
                 rule_id, count
             ));
         }
-        
+
         // Add histogram metrics
-        output.push_str(&self.evaluation_duration.to_prometheus(
-            "fuserule_evaluation_duration",
-            ""
-        ));
-        
+        output.push_str(
+            &self
+                .evaluation_duration
+                .to_prometheus("fuserule_evaluation_duration", ""),
+        );
+
         // Add per-rule evaluation duration histograms
         let rule_durations = self.rule_evaluation_duration.lock().unwrap();
         for (rule_id, hist) in rule_durations.iter() {
             output.push_str(&hist.to_prometheus(
                 "fuserule_rule_evaluation_duration",
-                &format!("rule_id=\"{}\"", rule_id)
+                &format!("rule_id=\"{}\"", rule_id),
             ));
         }
-        
+
         let agent_durations = self.agent_execution_duration.lock().unwrap();
         for (agent_name, hist) in agent_durations.iter() {
             output.push_str(&hist.to_prometheus(
                 "fuserule_agent_execution_duration",
-                &format!("agent=\"{}\"", agent_name)
+                &format!("agent=\"{}\"", agent_name),
             ));
         }
-        
+
         output
     }
 }

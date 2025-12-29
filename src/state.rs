@@ -45,7 +45,7 @@ impl SledStateStore {
         let db = sled::open(path)?;
         Ok(Self { db })
     }
-    
+
     /// Background task to clean up expired state entries
     pub fn start_cleanup_task(&self, rules_ttl: std::collections::HashMap<String, u64>) {
         let db = self.db.clone();
@@ -61,7 +61,7 @@ impl SledStateStore {
             }
         });
     }
-    
+
     fn cleanup_expired_static(db: &Db, rule_id: &str, ttl_seconds: u64) -> Result<bool> {
         let key = format!("rule_state:{}", rule_id);
         if let Some(bytes) = db.get(&key)? {
@@ -119,11 +119,15 @@ impl StateStore for SledStateStore {
 
         Ok(transition)
     }
-    
+
     async fn cleanup_expired(&self, rule_id: &str, ttl_seconds: u64) -> Result<bool> {
-        Ok(Self::cleanup_expired_static(&self.db, rule_id, ttl_seconds)?)
+        Ok(Self::cleanup_expired_static(
+            &self.db,
+            rule_id,
+            ttl_seconds,
+        )?)
     }
-    
+
     async fn get_last_transition_time(&self, rule_id: &str) -> Result<Option<DateTime<Utc>>> {
         let key = format!("rule_state:{}", rule_id);
         if let Some(bytes) = self.db.get(&key)? {

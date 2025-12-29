@@ -1,8 +1,8 @@
-use arrow_rule_agent::config::FuseRuleConfig;
-use arrow_rule_agent::RuleEngine;
 use arrow::array::{Float64Array, Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use arrow_rule_agent::config::FuseRuleConfig;
+use arrow_rule_agent::RuleEngine;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -57,10 +57,7 @@ async fn test_rule_evaluation() {
     let price_array = Arc::new(Float64Array::from(vec![150.0, 50.0, 200.0]));
     let symbol_array = Arc::new(StringArray::from(vec!["AAPL", "GOOGL", "MSFT"]));
 
-    let batch = RecordBatch::try_new(
-        Arc::new(schema),
-        vec![price_array, symbol_array],
-    ).unwrap();
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![price_array, symbol_array]).unwrap();
 
     // Process batch
     let traces = engine.process_batch(&batch).await.unwrap();
@@ -68,7 +65,10 @@ async fn test_rule_evaluation() {
     // Verify rule activated for high prices
     assert_eq!(traces.len(), 1);
     assert_eq!(traces[0].rule_id, "test_rule");
-    assert!(matches!(traces[0].result, arrow_rule_agent::state::PredicateResult::True));
+    assert!(matches!(
+        traces[0].result,
+        arrow_rule_agent::state::PredicateResult::True
+    ));
 }
 
 #[tokio::test]
@@ -81,12 +81,10 @@ async fn test_window_aggregation() {
             ingest_rate_limit: None,
             api_keys: vec![],
         },
-        schema: vec![
-            arrow_rule_agent::config::FieldDef {
-                name: "price".to_string(),
-                data_type: "float64".to_string(),
-            },
-        ],
+        schema: vec![arrow_rule_agent::config::FieldDef {
+            name: "price".to_string(),
+            data_type: "float64".to_string(),
+        }],
         rules: vec![arrow_rule_agent::config::RuleConfig {
             id: "window_rule".to_string(),
             name: "Window Test".to_string(),
@@ -108,15 +106,14 @@ async fn test_window_aggregation() {
 
     let mut engine = RuleEngine::from_config(config).await.unwrap();
 
-    let schema = Schema::new(vec![
-        Field::new("price", DataType::Float64, true),
-    ]);
+    let schema = Schema::new(vec![Field::new("price", DataType::Float64, true)]);
 
     // First batch
     let batch1 = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![Arc::new(Float64Array::from(vec![60.0]))],
-    ).unwrap();
+    )
+    .unwrap();
 
     let _traces1 = engine.process_batch(&batch1).await.unwrap();
 
@@ -124,9 +121,9 @@ async fn test_window_aggregation() {
     let batch2 = RecordBatch::try_new(
         Arc::new(schema),
         vec![Arc::new(Float64Array::from(vec![70.0]))],
-    ).unwrap();
+    )
+    .unwrap();
 
     let traces2 = engine.process_batch(&batch2).await.unwrap();
     assert_eq!(traces2.len(), 1);
 }
-

@@ -1,6 +1,6 @@
 use crate::RuleEngine;
-use arrow_json::ReaderBuilder;
 use anyhow::{Context, Result};
+use arrow_json::ReaderBuilder;
 use axum::response::Response;
 use std::io::Cursor;
 use std::sync::Arc;
@@ -36,11 +36,11 @@ impl KafkaIngestion {
     }
 
     pub async fn run(&self) -> Result<()> {
+        use futures::StreamExt;
         use rdkafka::config::ClientConfig;
         use rdkafka::consumer::{Consumer, StreamConsumer};
-        use rdkafka::Message;
         use rdkafka::util::Timeout;
-        use futures::StreamExt;
+        use rdkafka::Message;
 
         info!(
             brokers = ?self.brokers,
@@ -55,7 +55,10 @@ impl KafkaIngestion {
             .set("group.id", &self.group_id)
             .set("enable.partition.eof", "false")
             .set("session.timeout.ms", "6000")
-            .set("enable.auto.commit", if self.auto_commit { "true" } else { "false" })
+            .set(
+                "enable.auto.commit",
+                if self.auto_commit { "true" } else { "false" },
+            )
             .set("auto.offset.reset", "earliest")
             .create()
             .context("Failed to create Kafka consumer")?;
@@ -102,8 +105,8 @@ impl KafkaIngestion {
 
     async fn process_message(&self, payload: &[u8]) -> Result<()> {
         // Try to parse as JSON
-        let json_value: serde_json::Value = serde_json::from_slice(payload)
-            .context("Failed to parse Kafka message as JSON")?;
+        let json_value: serde_json::Value =
+            serde_json::from_slice(payload).context("Failed to parse Kafka message as JSON")?;
 
         // Convert to RecordBatch
         let json_data = serde_json::to_vec(&json_value)?;
@@ -124,10 +127,7 @@ impl KafkaIngestion {
                     let mut engine_lock = self.engine.write().await;
                     match engine_lock.process_batch(&batch).await {
                         Ok(_traces) => {
-                            debug!(
-                                rows = batch.num_rows(),
-                                "Processed batch from Kafka"
-                            );
+                            debug!(rows = batch.num_rows(), "Processed batch from Kafka");
                         }
                         Err(e) => {
                             error!(error = %e, "Failed to process batch from Kafka");
@@ -161,9 +161,9 @@ impl WebSocketIngestion {
     }
 
     pub async fn run(&self) -> Result<()> {
-        use tokio_tungstenite::{accept_async, WebSocketStream};
         use tokio::net::TcpListener;
         use tokio::net::TcpStream;
+        use tokio_tungstenite::{accept_async, WebSocketStream};
 
         info!(
             bind = %self.bind,
@@ -199,10 +199,10 @@ async fn handle_websocket_stream(
     stream: WebSocketStream<TcpStream>,
     engine: SharedEngine,
 ) -> Result<()> {
-    use tokio_tungstenite::tungstenite::Message;
-    use futures::{SinkExt, StreamExt};
     use arrow_json::ReaderBuilder;
+    use futures::{SinkExt, StreamExt};
     use std::io::Cursor;
+    use tokio_tungstenite::tungstenite::Message;
 
     let (mut sender, mut receiver) = stream.split();
 
@@ -330,4 +330,3 @@ async fn handle_websocket_stream(
     info!("WebSocket connection ended");
     Ok(())
 }
-

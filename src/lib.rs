@@ -1,3 +1,29 @@
+//! # FuseRule - High-Performance Rule Engine
+//!
+//! FuseRule is a high-performance, Arrow-native Complex Event Processing (CEP) engine
+//! with SQL-powered rules for real-time data auditing and event processing.
+//!
+//! ## Quick Start
+//!
+//! ```no_run
+//! use arrow_rule_agent::{RuleEngine, config::FuseRuleConfig};
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let config = FuseRuleConfig::from_file("fuse_rule_config.yaml")?;
+//! let mut engine = RuleEngine::from_config(config).await?;
+//! // Process batches and evaluate rules...
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Features
+//!
+//! - **Arrow-Native**: Zero-copy columnar data processing
+//! - **SQL-Powered Rules**: Write predicates using standard SQL
+//! - **Stateful Transitions**: Track rule activation/deactivation
+//! - **Time Windows**: Sliding windows for aggregate functions
+//! - **Pluggable Architecture**: Custom state stores, evaluators, and agents
+
 pub mod agent;
 pub mod agent_queue;
 pub mod cli;
@@ -26,18 +52,63 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
-/// A trace of what happened during an evaluation batch (Principle 4: Observability)
+/// A trace of what happened during an evaluation batch.
+///
+/// This provides observability into rule evaluation, showing which rules
+/// were evaluated, their results, and whether actions were fired.
+///
+/// # Example
+///
+/// ```no_run
+/// # use arrow_rule_agent::RuleEngine;
+/// # async fn example(engine: &mut RuleEngine) -> anyhow::Result<()> {
+/// let traces = engine.process_batch(&batch).await?;
+/// for trace in traces {
+///     if trace.action_fired {
+///         println!("Rule '{}' activated!", trace.rule_name);
+///     }
+/// }
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EvaluationTrace {
+    /// Unique identifier for the rule
     pub rule_id: String,
+    /// Human-readable rule name
     pub rule_name: String,
+    /// Rule version number
     pub rule_version: u32,
+    /// Result of predicate evaluation
     pub result: PredicateResult,
-    pub transition: String, // "None", "Activated", "Deactivated"
+    /// State transition: "None", "Activated", or "Deactivated"
+    pub transition: String,
+    /// Whether the action/agent was fired
     pub action_fired: bool,
+    /// Optional status message from the agent
     pub agent_status: Option<String>,
 }
 
+/// The core rule engine that evaluates rules against data batches.
+///
+/// `RuleEngine` is the main entry point for using FuseRule. It manages
+/// rules, state, agents, and provides methods to process data batches.
+///
+/// # Example
+///
+/// ```no_run
+/// use arrow_rule_agent::{RuleEngine, config::FuseRuleConfig};
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// // Create engine from configuration
+/// let config = FuseRuleConfig::from_file("config.yaml")?;
+/// let mut engine = RuleEngine::from_config(config).await?;
+///
+/// // Process a batch of data
+/// let traces = engine.process_batch(&batch).await?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct RuleEngine {
     evaluator: Box<dyn RuleEvaluator>,
     state: Box<dyn StateStore>,
@@ -65,7 +136,7 @@ impl RuleEngine {
             worker.run().await;
         });
         // Note: worker_handle is dropped but task continues running
-        
+
         Self {
             evaluator,
             state,
@@ -77,7 +148,7 @@ impl RuleEngine {
             circuit_breakers: HashMap::new(),
         }
     }
-    
+
     pub fn get_or_create_circuit_breaker(&mut self, agent_name: &str) -> Arc<CircuitBreaker> {
         self.circuit_breakers
             .entry(agent_name.to_string())
@@ -109,10 +180,8 @@ impl RuleEngine {
 
         // 2. Build Components (Edges)
         let evaluator = Box::new(crate::evaluator::DataFusionEvaluator::new());
-        let state_store = crate::state::SledStateStore::new(
-            &config.engine.persistence_path,
-        )?;
-        
+        let state_store = crate::state::SledStateStore::new(&config.engine.persistence_path)?;
+
         // Start state cleanup task for rules with TTL
         let mut rules_ttl = std::collections::HashMap::new();
         for rule in &config.rules {
@@ -123,12 +192,18 @@ impl RuleEngine {
         if !rules_ttl.is_empty() {
             state_store.start_cleanup_task(rules_ttl);
         }
-        
+
         let state = Box::new(state_store);
 
         let max_pending = config.engine.max_pending_batches;
         let agent_concurrency = config.engine.agent_concurrency;
-        let mut engine = Self::new(evaluator, state, Arc::clone(&schema), max_pending, agent_concurrency);
+        let mut engine = Self::new(
+            evaluator,
+            state,
+            Arc::clone(&schema),
+            max_pending,
+            agent_concurrency,
+        );
 
         // 3. Add Agents
         for agent_cfg in config.agents {
@@ -140,7 +215,10 @@ impl RuleEngine {
                     if let Some(url) = agent_cfg.url {
                         engine.add_agent(
                             agent_cfg.name,
-                            Arc::new(crate::agent::WebhookAgent::new(url, agent_cfg.template.clone())),
+                            Arc::new(crate::agent::WebhookAgent::new(
+                                url,
+                                agent_cfg.template.clone(),
+                            )),
                         );
                     }
                 }
@@ -185,7 +263,10 @@ impl RuleEngine {
                         let agent_name = agent_cfg.name.clone();
                         new_agents.insert(
                             agent_name.clone(),
-                            Arc::new(crate::agent::WebhookAgent::new(url, agent_cfg.template.clone())) as Arc<dyn Agent>,
+                            Arc::new(crate::agent::WebhookAgent::new(
+                                url,
+                                agent_cfg.template.clone(),
+                            )) as Arc<dyn Agent>,
                         );
                         // Create circuit breaker for webhook agents
                         new_circuit_breakers.insert(
@@ -256,17 +337,17 @@ impl RuleEngine {
         self.rules.push(compiled);
         Ok(())
     }
-    
+
     pub async fn update_rule(&mut self, rule_id: &str, new_rule: Rule) -> Result<()> {
         // Find existing rule
         let rule_idx = self.rules.iter().position(|r| r.rule.id == rule_id);
         if rule_idx.is_none() {
             anyhow::bail!("Rule not found: {}", rule_id);
         }
-        
+
         let rule_idx = rule_idx.unwrap();
         let old_rule = &self.rules[rule_idx].rule;
-        
+
         // Preserve window buffer if window_seconds unchanged
         let preserve_buffer = old_rule.window_seconds == new_rule.window_seconds;
         let existing_buffer = if preserve_buffer {
@@ -274,23 +355,24 @@ impl RuleEngine {
         } else {
             None
         };
-        
+
         // Compile new rule
         let compiled = self.evaluator.compile(new_rule, &self.schema)?;
-        
+
         // Replace rule
         self.rules[rule_idx] = compiled;
-        
+
         // Restore or create window buffer
         if let Some(buffer) = existing_buffer {
             self.window_buffers.insert(rule_id.to_string(), buffer);
         } else if let Some(secs) = self.rules[rule_idx].rule.window_seconds {
-            self.window_buffers.insert(rule_id.to_string(), WindowBuffer::new(secs));
+            self.window_buffers
+                .insert(rule_id.to_string(), WindowBuffer::new(secs));
         }
-        
+
         Ok(())
     }
-    
+
     pub async fn toggle_rule(&mut self, rule_id: &str, enabled: bool) -> Result<()> {
         let rule_idx = self.rules.iter().position(|r| r.rule.id == rule_id);
         if let Some(idx) = rule_idx {
@@ -303,7 +385,7 @@ impl RuleEngine {
 
     pub async fn process_batch(&mut self, batch: &RecordBatch) -> Result<Vec<EvaluationTrace>> {
         let _start = Instant::now();
-        
+
         let mut windowed_data = Vec::with_capacity(self.rules.len());
         for rule in &self.rules {
             if let Some(buffer) = self.window_buffers.get(&rule.rule.id) {
@@ -317,14 +399,12 @@ impl RuleEngine {
         let mut enabled_indices = Vec::new();
         let mut enabled_compiled_rules = Vec::new();
         let mut enabled_window_data = Vec::new();
-        
+
         for (i, rule) in self.rules.iter().enumerate() {
             if rule.rule.enabled {
                 enabled_indices.push(i);
                 enabled_compiled_rules.push(rule.clone());
-                enabled_window_data.push(
-                    windowed_data.get(i).cloned().unwrap_or_default()
-                );
+                enabled_window_data.push(windowed_data.get(i).cloned().unwrap_or_default());
             }
         }
 
@@ -355,7 +435,7 @@ impl RuleEngine {
         let enabled_count = enabled_indices.len();
         let mut enabled_results_iter = results_with_context.into_iter();
         let mut enabled_idx_iter = enabled_indices.into_iter();
-        
+
         // Record per-rule evaluation duration (approximate by dividing total time)
         // In a more sophisticated implementation, we'd track each rule individually
         let eval_duration = evaluation_start.elapsed();
@@ -364,18 +444,19 @@ impl RuleEngine {
         } else {
             0.0
         };
-        
+
         for (_i, rule) in self.rules.iter().enumerate() {
             if rule.rule.enabled {
                 let original_idx = enabled_idx_iter.next().unwrap();
                 let (result, context) = enabled_results_iter.next().unwrap();
                 let rule = &self.rules[original_idx].rule;
-                
+
                 // Record rule evaluation
                 crate::metrics::METRICS.record_rule_evaluation(&rule.id);
                 // Record per-rule evaluation duration histogram
-                crate::metrics::METRICS.record_rule_evaluation_duration(&rule.id, per_rule_duration);
-                
+                crate::metrics::METRICS
+                    .record_rule_evaluation_duration(&rule.id, per_rule_duration);
+
                 let transition = self.state.update_result(&rule.id, result).await?;
 
                 if transition != RuleTransition::None {
@@ -404,13 +485,11 @@ impl RuleEngine {
                     // Use async agent queue if available, otherwise execute synchronously
                     if let Some(agent_queue) = &self.agent_queue {
                         if let Some(agent) = self.agents.get(&rule.action) {
-                            let circuit_breaker = self.circuit_breakers
-                                .get(&rule.action)
-                                .cloned();
-                            
+                            let circuit_breaker = self.circuit_breakers.get(&rule.action).cloned();
+
                             // Get DLQ sender from queue
                             let dlq_sender = Some(agent_queue.dlq_sender.clone());
-                            
+
                             let task = AgentTask::new(
                                 activation,
                                 agent.clone(),
@@ -418,7 +497,7 @@ impl RuleEngine {
                                 circuit_breaker,
                                 dlq_sender,
                             );
-                            
+
                             if let Err(e) = agent_queue.enqueue(task).await {
                                 error!("Failed to enqueue agent task: {}", e);
                                 agent_status = Some(format!("enqueue_failed: {}", e));
@@ -485,7 +564,11 @@ impl RuleEngine {
             } else {
                 // Disabled rule - create trace with None transition
                 let rule = &rule.rule;
-                let last_result = self.state.get_last_result(&rule.id).await.unwrap_or(PredicateResult::False);
+                let last_result = self
+                    .state
+                    .get_last_result(&rule.id)
+                    .await
+                    .unwrap_or(PredicateResult::False);
                 traces.push(EvaluationTrace {
                     rule_id: rule.id.clone(),
                     rule_name: rule.name.clone(),

@@ -1,10 +1,10 @@
 use crate::config::FuseRuleConfig;
 use crate::RuleEngine;
-use arrow::array::{Float64Array, Int32Array, StringArray, BooleanArray};
+use anyhow::{Context, Result};
+use arrow::array::{BooleanArray, Float64Array, Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow_json::ReaderBuilder;
-use anyhow::{Context, Result};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use serde_json::Value;
@@ -43,7 +43,7 @@ impl Repl {
                 Ok(line) => {
                     let _ = rl.add_history_entry(line.as_str());
                     let trimmed = line.trim();
-                    
+
                     if trimmed.is_empty() {
                         continue;
                     }
@@ -111,8 +111,7 @@ impl Repl {
         }
 
         // Parse JSON
-        let json_value: Value = serde_json::from_str(json_str)
-            .context("Failed to parse JSON")?;
+        let json_value: Value = serde_json::from_str(json_str).context("Failed to parse JSON")?;
 
         // Convert to RecordBatch
         let json_data = serde_json::to_vec(&json_value)?;
@@ -130,9 +129,13 @@ impl Repl {
                 Ok(batch) => {
                     batch_count += 1;
                     let traces = engine.process_batch(&batch).await?;
-                    
-                    println!("✅ Ingested batch #{} ({} rows)", batch_count, batch.num_rows());
-                    
+
+                    println!(
+                        "✅ Ingested batch #{} ({} rows)",
+                        batch_count,
+                        batch.num_rows()
+                    );
+
                     for trace in traces {
                         if trace.action_fired {
                             println!(
@@ -170,10 +173,14 @@ impl Repl {
             println!("📊 Rule States:");
             for rule in &engine.rules {
                 let last_result = engine.state.get_last_result(&rule.rule.id).await?;
-                let window_size = engine.window_buffers
+                let window_size = engine
+                    .window_buffers
                     .get(&rule.rule.id)
                     .map(|b| {
-                        b.get_batches().iter().map(|batch| batch.num_rows()).sum::<usize>()
+                        b.get_batches()
+                            .iter()
+                            .map(|batch| batch.num_rows())
+                            .sum::<usize>()
                     })
                     .unwrap_or(0);
 
@@ -195,10 +202,14 @@ impl Repl {
             if let Some(rule) = rule {
                 let last_result = engine.state.get_last_result(&rule_id).await?;
                 let last_transition = engine.state.get_last_transition_time(&rule_id).await?;
-                let window_size = engine.window_buffers
+                let window_size = engine
+                    .window_buffers
                     .get(&rule_id)
                     .map(|b| {
-                        b.get_batches().iter().map(|batch| batch.num_rows()).sum::<usize>()
+                        b.get_batches()
+                            .iter()
+                            .map(|batch| batch.num_rows())
+                            .sum::<usize>()
                     })
                     .unwrap_or(0);
 
@@ -259,4 +270,3 @@ impl Repl {
         println!("  quit/exit      - Exit REPL");
     }
 }
-
