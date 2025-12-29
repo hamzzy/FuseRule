@@ -6,13 +6,15 @@ use arrow::array::{StringArray, Int32Array};
 use arrow::datatypes::{Schema, Field, DataType};
 use std::sync::Arc;
 use anyhow::Result;
+use tempfile;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
-    println!("🚀 Starting Arrow Rule Agent Demo - Phase 1: Core Engine");
+    println!("🚀 Starting Arrow Rule Agent Demo");
 
-    let mut engine = RuleEngine::new()?;
+    let temp_dir = tempfile::tempdir()?;
+    let mut engine = RuleEngine::new(temp_dir.path())?;
 
     // 1. Setup Data Schema
     let schema = Arc::new(Schema::new(vec![
@@ -21,6 +23,7 @@ async fn main() -> Result<()> {
     ]));
 
     // 2. Define Rules
+    // Scenario: Monitor a stream of server logs or transactions
     engine.add_rule(Rule {
         id: "r1".to_string(),
         name: "High Severity Alert".to_string(),
@@ -39,6 +42,7 @@ async fn main() -> Result<()> {
     let logger = LoggerAgent;
 
     // 4. Simulate Data Stream
+
     println!("\n📥 Batch 1: Low-traffic logs");
     let batch1 = RecordBatch::try_new(
         schema.clone(),
@@ -69,7 +73,7 @@ async fn main() -> Result<()> {
     )?;
     process_and_trigger(&mut engine, &batch3, &logger).await?;
 
-    println!("\n📥 Batch 4: Same critical state (Should NOT fire again - Edge-Triggered)");
+    println!("\n📥 Batch 4: Same critical state (Should NOT fire again - Deterministic)");
     let batch4 = RecordBatch::try_new(
         schema.clone(),
         vec![
@@ -78,6 +82,16 @@ async fn main() -> Result<()> {
         ],
     )?;
     process_and_trigger(&mut engine, &batch4, &logger).await?;
+
+    println!("\n📥 Batch 5: Count sky-rockets! Burst Detection triggers");
+    let batch5 = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec!["INFO", "WARN"])),
+            Arc::new(Int32Array::from(vec![150, 20])),
+        ],
+    )?;
+    process_and_trigger(&mut engine, &batch5, &logger).await?;
 
     println!("\n✅ Demo Completed");
     Ok(())
