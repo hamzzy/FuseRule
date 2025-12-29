@@ -22,6 +22,12 @@ pub struct DataFusionEvaluator {
     ctx: SessionContext,
 }
 
+impl Default for DataFusionEvaluator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DataFusionEvaluator {
     pub fn new() -> Self {
         Self {
@@ -141,14 +147,12 @@ impl RuleEvaluator for DataFusionEvaluator {
             self.ctx.register_table(&table_name, df.into_view())?;
 
             let result_batches = if rule.has_aggregates {
-                // For aggregate expressions (e.g., "AVG(price) > 100"), execute as aggregate query
-                // This aggregates over the entire window and returns a single boolean result
-                let select_expr = vec![rule.logical_expr.clone().alias("match_result")];
-                let select_df = self.ctx.table(&table_name).await?.select(select_expr)?;
-
-                select_df.collect().await?
+                // For aggregate expressions (e.g., "AVG(price) > 100"), execute as SQL query
+                // DataFusion requires aggregates to be in a proper SQL context
+                let sql = format!("SELECT ({}) as match_result FROM {}", rule.rule.predicate, table_name);
+                self.ctx.sql(&sql).await?.collect().await?
             } else {
-                // For non-aggregate expressions, evaluate per-row
+                // For non-aggregate expressions, evaluate per-row using DataFrame API
                 let select_expr = vec![rule.logical_expr.clone().alias("match_result")];
                 let select_df = self.ctx.table(&table_name).await?.select(select_expr)?;
 
@@ -169,7 +173,7 @@ impl RuleEvaluator for DataFusionEvaluator {
                 if let Some(bool_col) = col {
                     if rule.has_aggregates {
                         // Aggregate query returns single row - check if it's true
-                        if bool_col.len() > 0 && !bool_col.is_null(0) && bool_col.value(0) {
+                        if !bool_col.is_empty() && !bool_col.is_null(0) && bool_col.value(0) {
                             is_true = true;
                             // For aggregates, all rows in the window "match" conceptually
                             matched_rows = (0..combined_batch.num_rows()).collect();
@@ -225,7 +229,7 @@ pub fn infer_json_schema(value: &serde_json::Value) -> arrow::datatypes::Schema 
                 return arrow::datatypes::Schema::empty();
             }
             let mut fields = Vec::new();
-            if let Some(serde_json::Value::Object(map)) = arr.get(0) {
+            if let Some(serde_json::Value::Object(map)) = arr.first() {
                 for (k, v) in map {
                     let dt = match v {
                         serde_json::Value::Number(n) if n.is_i64() => {

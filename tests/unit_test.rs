@@ -1,5 +1,5 @@
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow_rule_agent::evaluator::DataFusionEvaluator;
+use arrow_rule_agent::evaluator::{DataFusionEvaluator, RuleEvaluator};
 use arrow_rule_agent::rule::Rule;
 use std::sync::Arc;
 

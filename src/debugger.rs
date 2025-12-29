@@ -1,9 +1,8 @@
 use crate::config::FuseRuleConfig;
-use crate::evaluator::{CompiledRuleEdge, DataFusionEvaluator};
+use crate::evaluator::{DataFusionEvaluator, RuleEvaluator};
 use crate::rule::Rule;
 use crate::state::PredicateResult;
 use anyhow::{Context, Result};
-use arrow::array::{Float64Array, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use rustyline::error::ReadlineError;
@@ -161,7 +160,7 @@ impl RuleDebugger {
     async fn handle_batch(&mut self, json_str: &str) -> Result<()> {
         if json_str.is_empty() {
             eprintln!("Usage: batch <json_data>");
-            eprintln!("   Example: batch '[{\"price\": 150, \"volume\": 1000}]'");
+            eprintln!("   Example: batch '[{{\"price\": 150, \"volume\": 1000}}]'");
             return Ok(());
         }
 
@@ -175,12 +174,12 @@ impl RuleDebugger {
         let json_data = serde_json::to_vec(&json_value)?;
         let cursor = Cursor::new(json_data);
 
-        let reader = ReaderBuilder::new(self.schema.clone())
+        let mut reader = ReaderBuilder::new(self.schema.clone())
             .build(cursor)
             .context("Failed to create JSON reader")?;
 
         // Read first batch
-        for batch_result in reader {
+        if let Some(batch_result) = reader.next() {
             match batch_result {
                 Ok(batch) => {
                     self.last_batch = Some(batch.clone());

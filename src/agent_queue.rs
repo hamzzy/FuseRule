@@ -20,6 +20,7 @@ pub struct CircuitBreaker {
     failure_count: Arc<tokio::sync::RwLock<u32>>,
     last_failure_time: Arc<tokio::sync::RwLock<Option<Instant>>>,
     failure_threshold: u32,
+    #[allow(dead_code)]
     timeout: Duration,
     half_open_timeout: Duration,
 }

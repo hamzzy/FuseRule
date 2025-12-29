@@ -1,6 +1,7 @@
 use crate::config::FuseRuleConfig;
-use crate::evaluator::DataFusionEvaluator;
+use crate::evaluator::{DataFusionEvaluator, RuleEvaluator};
 use crate::rule::Rule;
+use crate::RuleEngine;
 use anyhow::Result;
 use clap::Parser;
 
@@ -21,7 +22,9 @@ pub async fn validate_rule(config_path: &str, predicate: Option<&str>) -> Result
     if let Some(pred) = predicate {
         // Validate specific predicate
         let evaluator = DataFusionEvaluator::new();
-        let schema = crate::lib::RuleEngine::from_config(config.clone()).map(|e| e.schema())?;
+        let schema = RuleEngine::from_config(config.clone())
+            .await
+            .map(|e| e.schema())?;
 
         let test_rule = Rule {
             id: "test".to_string(),
@@ -40,13 +43,13 @@ pub async fn validate_rule(config_path: &str, predicate: Option<&str>) -> Result
             }
             Err(e) => {
                 eprintln!("❌ Predicate validation failed: {}", e);
-                Err(e.into())
+                Err(e)
             }
         }
     } else {
         // Validate all rules in config
         let evaluator = DataFusionEvaluator::new();
-        let engine = crate::lib::RuleEngine::from_config(config.clone()).await?;
+        let engine = RuleEngine::from_config(config.clone()).await?;
         let schema = engine.schema();
 
         let mut all_valid = true;

@@ -1,7 +1,7 @@
-use arrow::array::{BooleanArray, Float64Array, Int32Array};
+use arrow::array::{BooleanArray, Float64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_rule_agent::evaluator::DataFusionEvaluator;
+use arrow_rule_agent::evaluator::{DataFusionEvaluator, RuleEvaluator};
 use arrow_rule_agent::rule::Rule;
 use proptest::prelude::*;
 use std::sync::Arc;

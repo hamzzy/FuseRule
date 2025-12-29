@@ -1,10 +1,11 @@
 use crate::RuleEngine;
 use anyhow::{Context, Result};
 use arrow_json::ReaderBuilder;
-use axum::response::Response;
 use std::io::Cursor;
 use std::sync::Arc;
+use tokio::net::TcpStream;
 use tokio::sync::RwLock;
+use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error, info};
 
 pub type SharedEngine = Arc<RwLock<RuleEngine>>;
@@ -39,7 +40,6 @@ impl KafkaIngestion {
         use futures::StreamExt;
         use rdkafka::config::ClientConfig;
         use rdkafka::consumer::{Consumer, StreamConsumer};
-        use rdkafka::util::Timeout;
         use rdkafka::Message;
 
         info!(
@@ -51,7 +51,7 @@ impl KafkaIngestion {
 
         // Create Kafka consumer
         let consumer: StreamConsumer = ClientConfig::new()
-            .set("bootstrap.servers", &self.brokers.join(","))
+            .set("bootstrap.servers", self.brokers.join(","))
             .set("group.id", &self.group_id)
             .set("enable.partition.eof", "false")
             .set("session.timeout.ms", "6000")
@@ -162,8 +162,7 @@ impl WebSocketIngestion {
 
     pub async fn run(&self) -> Result<()> {
         use tokio::net::TcpListener;
-        use tokio::net::TcpStream;
-        use tokio_tungstenite::{accept_async, WebSocketStream};
+        use tokio_tungstenite::accept_async;
 
         info!(
             bind = %self.bind,
@@ -319,6 +318,9 @@ async fn handle_websocket_stream(
             }
             Ok(Message::Pong(_)) => {
                 // Ignore pong
+            }
+            Ok(Message::Frame(_)) => {
+                // Ignore frames
             }
             Err(e) => {
                 error!(error = %e, "WebSocket error");

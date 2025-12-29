@@ -61,7 +61,17 @@ use tracing::{debug, error, info, warn};
 ///
 /// ```no_run
 /// # use arrow_rule_agent::RuleEngine;
+/// # use arrow::array::Float64Array;
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use arrow::record_batch::RecordBatch;
+/// # use std::sync::Arc;
 /// # async fn example(engine: &mut RuleEngine) -> anyhow::Result<()> {
+/// // Create a test batch
+/// let schema = Schema::new(vec![Field::new("price", DataType::Float64, true)]);
+/// let batch = RecordBatch::try_new(
+///     Arc::new(schema),
+///     vec![Arc::new(Float64Array::from(vec![150.0, 50.0]))],
+/// )?;
 /// let traces = engine.process_batch(&batch).await?;
 /// for trace in traces {
 ///     if trace.action_fired {
@@ -98,11 +108,22 @@ pub struct EvaluationTrace {
 ///
 /// ```no_run
 /// use arrow_rule_agent::{RuleEngine, config::FuseRuleConfig};
+/// use arrow::array::Float64Array;
+/// use arrow::datatypes::{DataType, Field, Schema};
+/// use arrow::record_batch::RecordBatch;
+/// use std::sync::Arc;
 ///
 /// # async fn example() -> anyhow::Result<()> {
 /// // Create engine from configuration
 /// let config = FuseRuleConfig::from_file("config.yaml")?;
 /// let mut engine = RuleEngine::from_config(config).await?;
+///
+/// // Create a test batch
+/// let schema = Schema::new(vec![Field::new("price", DataType::Float64, true)]);
+/// let batch = RecordBatch::try_new(
+///     Arc::new(schema),
+///     vec![Arc::new(Float64Array::from(vec![150.0, 50.0]))],
+/// )?;
 ///
 /// // Process a batch of data
 /// let traces = engine.process_batch(&batch).await?;
@@ -351,7 +372,7 @@ impl RuleEngine {
         // Preserve window buffer if window_seconds unchanged
         let preserve_buffer = old_rule.window_seconds == new_rule.window_seconds;
         let existing_buffer = if preserve_buffer {
-            self.window_buffers.remove(&rule_id)
+            self.window_buffers.remove(rule_id)
         } else {
             None
         };
@@ -445,7 +466,7 @@ impl RuleEngine {
             0.0
         };
 
-        for (_i, rule) in self.rules.iter().enumerate() {
+        for rule in self.rules.iter() {
             if rule.rule.enabled {
                 let original_idx = enabled_idx_iter.next().unwrap();
                 let (result, context) = enabled_results_iter.next().unwrap();

@@ -1,9 +1,6 @@
-use crate::config::FuseRuleConfig;
 use crate::RuleEngine;
 use anyhow::{Context, Result};
-use arrow::array::{BooleanArray, Float64Array, Int32Array, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
+use arrow::datatypes::Schema;
 use arrow_json::ReaderBuilder;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
@@ -172,10 +169,10 @@ impl Repl {
             // Show all states
             println!("📊 Rule States:");
             for rule in &engine.rules {
-                let last_result = engine.state.get_last_result(&rule.rule.id).await?;
+                let last_result = engine.state.get_last_result(rule.rule.id.as_str()).await?;
                 let window_size = engine
                     .window_buffers
-                    .get(&rule.rule.id)
+                    .get(rule.rule.id.as_str())
                     .map(|b| {
                         b.get_batches()
                             .iter()
@@ -200,11 +197,11 @@ impl Repl {
             // Show specific rule state
             let rule = engine.rules.iter().find(|r| r.rule.id == rule_id);
             if let Some(rule) = rule {
-                let last_result = engine.state.get_last_result(&rule_id).await?;
-                let last_transition = engine.state.get_last_transition_time(&rule_id).await?;
+                let last_result = engine.state.get_last_result(rule_id).await?;
+                let last_transition = engine.state.get_last_transition_time(rule_id).await?;
                 let window_size = engine
                     .window_buffers
-                    .get(&rule_id)
+                    .get(rule_id)
                     .map(|b| {
                         b.get_batches()
                             .iter()

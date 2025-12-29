@@ -1,6 +1,6 @@
 use anyhow::Result;
 use arrow_rule_agent::config::{FuseRuleConfig, SourceConfig};
-use arrow_rule_agent::ingestion::{KafkaIngestion, SharedEngine, WebSocketIngestion};
+use arrow_rule_agent::ingestion::{KafkaIngestion, WebSocketIngestion};
 use arrow_rule_agent::server::FuseRuleServer;
 use arrow_rule_agent::RuleEngine;
 use clap::{Parser, Subcommand};
@@ -59,13 +59,13 @@ async fn main() -> Result<()> {
 
     let args = Cli::parse();
 
-    match &args.command {
+    match args.command {
         Commands::Validate { config, predicate } => {
-            arrow_rule_agent::cli::validate_rule(config, predicate.as_deref()).await?;
+            arrow_rule_agent::cli::validate_rule(&config, predicate.as_deref()).await?;
         }
         Commands::Repl { config } => {
             println!("🔥 Starting FuseRule REPL...");
-            let config_data = FuseRuleConfig::from_file(config)?;
+            let config_data = FuseRuleConfig::from_file(&config)?;
             let engine = RuleEngine::from_config(config_data.clone()).await?;
             let shared_engine = Arc::new(RwLock::new(engine));
             let schema = shared_engine.read().await.schema();
@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
         }
         Commands::Debug { config } => {
             println!("🐛 Starting FuseRule Debugger...");
-            let config_data = FuseRuleConfig::from_file(config)?;
+            let config_data = FuseRuleConfig::from_file(&config)?;
             let schema = RuleEngine::from_config(config_data.clone())
                 .await
                 .map(|e| e.schema())?;
@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
             println!("🔥 Initializing FuseRule Daemon...");
 
             // 1. Load Config
-            let config_data = FuseRuleConfig::from_file(config)?;
+            let config_data = FuseRuleConfig::from_file(&config)?;
 
             // 2. Build Engine
             let engine = RuleEngine::from_config(config_data.clone()).await?;
@@ -158,7 +158,7 @@ async fn main() -> Result<()> {
 
             // Start HTTP server and wait for it
             let server_handle = tokio::spawn(async move {
-                if let Err(e) = server.run(*port).await {
+                if let Err(e) = server.run(port).await {
                     tracing::error!(error = %e, "HTTP server error");
                 }
             });

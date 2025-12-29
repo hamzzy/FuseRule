@@ -68,6 +68,12 @@ pub struct SystemMetrics {
     pub agent_execution_duration: Mutex<HashMap<String, Histogram>>,
 }
 
+impl Default for SystemMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SystemMetrics {
     pub fn new() -> Self {
         Self {
@@ -92,7 +98,7 @@ impl SystemMetrics {
         let mut map = self.agent_execution_duration.lock().unwrap();
         let hist = map
             .entry(agent_name.to_string())
-            .or_insert_with(|| Histogram::new());
+            .or_insert_with(Histogram::new);
         hist.record(duration_secs);
     }
 
@@ -122,7 +128,7 @@ impl SystemMetrics {
         let mut map = self.rule_evaluation_duration.lock().unwrap();
         let hist = map
             .entry(rule_id.to_string())
-            .or_insert_with(|| Histogram::new());
+            .or_insert_with(Histogram::new);
         hist.record(duration_secs);
     }
 

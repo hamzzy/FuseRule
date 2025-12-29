@@ -1,9 +1,7 @@
 use anyhow::Result;
 use arrow::array::{Float64Array, Int32Array};
-use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_rule_agent::config::{FuseRuleConfig, RuleConfig};
-use arrow_rule_agent::rule::Rule;
+use arrow_rule_agent::config::FuseRuleConfig;
 use arrow_rule_agent::RuleEngine;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

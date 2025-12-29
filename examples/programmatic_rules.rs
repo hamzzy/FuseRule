@@ -9,8 +9,7 @@ use arrow::array::Float64Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow_rule_agent::{
-    config::FuseRuleConfig, evaluator::DataFusionEvaluator, rule::Rule, state::SledStateStore,
-    RuleEngine,
+    evaluator::DataFusionEvaluator, rule::Rule, state::SledStateStore, RuleEngine,
 };
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -81,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
     println!("   ✅ Rule disabled");
 
     // 9. Process again (rule should not fire)
-    let traces = engine.process_batch(&batch).await?;
+    let _traces = engine.process_batch(&batch).await?;
     println!("   ✅ Processed (rule disabled, should not fire)");
 
     Ok(())
