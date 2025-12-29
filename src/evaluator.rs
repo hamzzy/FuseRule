@@ -149,7 +149,10 @@ impl RuleEvaluator for DataFusionEvaluator {
             let result_batches = if rule.has_aggregates {
                 // For aggregate expressions (e.g., "AVG(price) > 100"), execute as SQL query
                 // DataFusion requires aggregates to be in a proper SQL context
-                let sql = format!("SELECT ({}) as match_result FROM {}", rule.rule.predicate, table_name);
+                let sql = format!(
+                    "SELECT ({}) as match_result FROM {}",
+                    rule.rule.predicate, table_name
+                );
                 self.ctx.sql(&sql).await?.collect().await?
             } else {
                 // For non-aggregate expressions, evaluate per-row using DataFrame API
