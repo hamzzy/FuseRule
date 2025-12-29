@@ -50,6 +50,8 @@ pub struct RuleConfig {
     pub version: u32,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(default)]
+    pub state_ttl_seconds: Option<u64>, // TTL for rule state (None = never expire)
 }
 
 fn default_enabled() -> bool {

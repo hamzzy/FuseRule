@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod agent_queue;
+pub mod cli;
 pub mod config;
 pub mod evaluator;
 pub mod ingestion;
@@ -106,9 +107,22 @@ impl RuleEngine {
 
         // 2. Build Components (Edges)
         let evaluator = Box::new(crate::evaluator::DataFusionEvaluator::new());
-        let state = Box::new(crate::state::SledStateStore::new(
+        let state_store = crate::state::SledStateStore::new(
             &config.engine.persistence_path,
-        )?);
+        )?;
+        
+        // Start state cleanup task for rules with TTL
+        let mut rules_ttl = std::collections::HashMap::new();
+        for rule in &config.rules {
+            if let Some(ttl) = rule.state_ttl_seconds {
+                rules_ttl.insert(rule.id.clone(), ttl);
+            }
+        }
+        if !rules_ttl.is_empty() {
+            state_store.start_cleanup_task(rules_ttl);
+        }
+        
+        let state = Box::new(state_store);
 
         let max_pending = config.engine.max_pending_batches;
         let agent_concurrency = config.engine.agent_concurrency;

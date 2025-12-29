@@ -601,6 +601,10 @@ async fn handle_rule_state(
     let last_result = engine_lock.state.get_last_result(&rule_id).await
         .unwrap_or(crate::state::PredicateResult::False);
     
+    let last_transition = engine_lock.state.get_last_transition_time(&rule_id).await
+        .ok()
+        .flatten();
+    
     let window_size = engine_lock.window_buffers
         .get(&rule_id)
         .map(|b| {
@@ -612,20 +616,29 @@ async fn handle_rule_state(
     let metrics = crate::metrics::METRICS.snapshot();
     let activation_count = metrics.rule_activations.get(&rule_id).copied().unwrap_or(0);
     
+    let mut response = serde_json::json!({
+        "rule_id": rule_id,
+        "rule_name": rule.rule.name,
+        "current_state": match last_result {
+            crate::state::PredicateResult::True => "active",
+            crate::state::PredicateResult::False => "inactive",
+        },
+        "activation_count": activation_count,
+        "window_size": window_size,
+        "enabled": rule.rule.enabled,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    });
+    
+    if let Some(transition_time) = last_transition {
+        response.as_object_mut().unwrap().insert(
+            "last_transition".to_string(),
+            serde_json::Value::String(transition_time.to_rfc3339()),
+        );
+    }
+    
     (
         StatusCode::OK,
-        Json(serde_json::json!({
-            "rule_id": rule_id,
-            "rule_name": rule.rule.name,
-            "current_state": match last_result {
-                crate::state::PredicateResult::True => "active",
-                crate::state::PredicateResult::False => "inactive",
-            },
-            "activation_count": activation_count,
-            "window_size": window_size,
-            "enabled": rule.rule.enabled,
-            "timestamp": chrono::Utc::now().to_rfc3339(),
-        })),
+        Json(response),
     )
 }
 

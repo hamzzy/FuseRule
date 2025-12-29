@@ -28,6 +28,16 @@ enum Commands {
         #[arg(short, long, default_value_t = 3030)]
         port: u16,
     },
+    /// Validate rules in configuration file
+    Validate {
+        /// Path to the configuration file
+        #[arg(short, long, default_value = "fuse_rule_config.yaml")]
+        config: String,
+        
+        /// Specific predicate to validate (optional)
+        #[arg(short, long)]
+        predicate: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -38,6 +48,9 @@ async fn main() -> Result<()> {
     let args = Cli::parse();
 
     match &args.command {
+        Commands::Validate { config, predicate } => {
+            arrow_rule_agent::cli::validate_rule(config, predicate.as_deref()).await?;
+        }
         Commands::Run { config, port } => {
             println!("🔥 Initializing FuseRule Daemon...");
 

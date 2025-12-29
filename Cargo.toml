@@ -38,3 +38,6 @@ futures = "0.3"
 handlebars = "5.1"
 rdkafka = { version = "0.36", features = ["cmake-build", "ssl-vendored"] }
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
