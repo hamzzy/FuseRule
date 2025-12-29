@@ -8,6 +8,12 @@ pub struct Rule {
     pub action: String,
     pub window_seconds: Option<u64>,
     pub version: u32,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone)]

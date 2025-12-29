@@ -1,5 +1,7 @@
+use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use tracing::{debug, info};
 
 #[derive(Debug, Clone)]
 pub struct Activation {
@@ -29,13 +31,26 @@ impl Agent for LoggerAgent {
             .as_ref()
             .map(|b| b.num_rows())
             .unwrap_or(0);
-        println!(
-            "[Agent: {}] Firing action '{}' for rule '{}' ({}) - Context: {} rows matched",
-            self.name(),
-            activation.action,
-            activation.rule_name,
-            activation.rule_id,
-            rows
+        
+        // Log matched rows data for debugging
+        if let Some(batch) = &activation.context {
+            let field_names: Vec<String> = batch.schema().fields().iter().map(|f| f.name().clone()).collect();
+            debug!(
+                agent = self.name(),
+                rule_id = %activation.rule_id,
+                matched_rows = rows,
+                columns = ?field_names,
+                "Agent firing with matched data"
+            );
+        }
+        
+        info!(
+            agent = self.name(),
+            action = %activation.action,
+            rule_name = %activation.rule_name,
+            rule_id = %activation.rule_id,
+            matched_rows = rows,
+            "Agent firing action"
         );
         Ok(())
     }
@@ -48,9 +63,16 @@ pub struct WebhookAgent {
 
 impl WebhookAgent {
     pub fn new(url: String) -> Self {
+        // Use connection pooling with proper configuration
+        let client = reqwest::Client::builder()
+            .pool_max_idle_per_host(10)
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("Failed to create HTTP client");
+        
         Self {
             url,
-            client: reqwest::Client::new(),
+            client,
         }
     }
 }
@@ -62,7 +84,8 @@ impl Agent for WebhookAgent {
     }
 
     async fn execute(&self, activation: &Activation) -> anyhow::Result<()> {
-        let payload = serde_json::json!({
+        // Build rich payload with matched rows data
+        let mut payload = serde_json::json!({
             "rule_id": activation.rule_id,
             "rule_name": activation.rule_name,
             "action": activation.action,
@@ -70,7 +93,88 @@ impl Agent for WebhookAgent {
             "timestamp": chrono::Utc::now().to_rfc3339(),
         });
 
-        println!("[Agent: webhook] Sending POST to {}...", self.url);
+        // Add matched rows data if available (rich context)
+        if let Some(batch) = &activation.context {
+            // Convert RecordBatch to JSON for rich context
+            let schema = batch.schema();
+            let mut rows = Vec::new();
+            for row_idx in 0..batch.num_rows() {
+                let mut row = serde_json::Map::new();
+                for col_idx in 0..batch.num_columns() {
+                    let field = schema.field(col_idx);
+                    let array = batch.column(col_idx);
+                    // Convert array value to JSON (simplified - handles common types)
+                    let value = match array.data_type() {
+                        arrow::datatypes::DataType::Int32 => {
+                            if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Int32Array>() {
+                                if !arr.is_null(row_idx) {
+                                    serde_json::Value::Number(arr.value(row_idx).into())
+                                } else {
+                                    serde_json::Value::Null
+                                }
+                            } else {
+                                serde_json::Value::Null
+                            }
+                        }
+                        arrow::datatypes::DataType::Int64 => {
+                            if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Int64Array>() {
+                                if !arr.is_null(row_idx) {
+                                    serde_json::Value::Number(arr.value(row_idx).into())
+                                } else {
+                                    serde_json::Value::Null
+                                }
+                            } else {
+                                serde_json::Value::Null
+                            }
+                        }
+                        arrow::datatypes::DataType::Float64 => {
+                            if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Float64Array>() {
+                                if !arr.is_null(row_idx) {
+                                    serde_json::Value::Number(
+                                        serde_json::Number::from_f64(arr.value(row_idx))
+                                            .unwrap_or_else(|| serde_json::Number::from(0))
+                                    )
+                                } else {
+                                    serde_json::Value::Null
+                                }
+                            } else {
+                                serde_json::Value::Null
+                            }
+                        }
+                        arrow::datatypes::DataType::Boolean => {
+                            if let Some(arr) = array.as_any().downcast_ref::<arrow::array::BooleanArray>() {
+                                if !arr.is_null(row_idx) {
+                                    serde_json::Value::Bool(arr.value(row_idx))
+                                } else {
+                                    serde_json::Value::Null
+                                }
+                            } else {
+                                serde_json::Value::Null
+                            }
+                        }
+                        arrow::datatypes::DataType::Utf8 => {
+                            if let Some(arr) = array.as_any().downcast_ref::<arrow::array::StringArray>() {
+                                if !arr.is_null(row_idx) {
+                                    serde_json::Value::String(arr.value(row_idx).to_string())
+                                } else {
+                                    serde_json::Value::Null
+                                }
+                            } else {
+                                serde_json::Value::Null
+                            }
+                        }
+                        _ => serde_json::Value::Null,
+                    };
+                    row.insert(field.name().clone(), value);
+                }
+                rows.push(serde_json::Value::Object(row));
+            }
+            payload.as_object_mut()
+                .unwrap()
+                .insert("matched_data".to_string(), serde_json::Value::Array(rows));
+        }
+
+        debug!(url = %self.url, rule_id = %activation.rule_id, "Sending webhook with rich context");
 
         // In a real production system, we might want to handle retries here
         self.client.post(&self.url).json(&payload).send().await?;

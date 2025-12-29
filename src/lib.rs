@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_queue;
 pub mod config;
 pub mod evaluator;
 pub mod metrics;
@@ -8,6 +9,7 @@ pub mod state;
 pub mod window;
 
 use crate::agent::{Activation, Agent};
+use crate::agent_queue::{AgentQueue, AgentTask, CircuitBreaker};
 use crate::config::FuseRuleConfig;
 use crate::evaluator::{CompiledRuleEdge, RuleEvaluator};
 use crate::rule::Rule;
@@ -17,6 +19,7 @@ use anyhow::Result;
 use arrow::record_batch::RecordBatch;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
 /// A trace of what happened during an evaluation batch (Principle 4: Observability)
@@ -38,6 +41,8 @@ pub struct RuleEngine {
     window_buffers: HashMap<String, WindowBuffer>,
     agents: HashMap<String, Arc<dyn Agent>>,
     schema: Arc<arrow::datatypes::Schema>,
+    agent_queue: Option<AgentQueue>,
+    circuit_breakers: HashMap<String, Arc<CircuitBreaker>>,
 }
 
 impl RuleEngine {
@@ -45,7 +50,18 @@ impl RuleEngine {
         evaluator: Box<dyn RuleEvaluator>,
         state: Box<dyn StateStore>,
         schema: Arc<arrow::datatypes::Schema>,
+        max_pending_batches: usize,
+        agent_concurrency: usize,
     ) -> Self {
+        // Create agent queue with bounded channel for backpressure
+        let (agent_queue, worker) = AgentQueue::new(Some(max_pending_batches));
+        let worker = worker.with_concurrency(agent_concurrency);
+        // Spawn worker in background
+        let _worker_handle = tokio::spawn(async move {
+            worker.run().await;
+        });
+        // Note: worker_handle is dropped but task continues running
+        
         Self {
             evaluator,
             state,
@@ -53,17 +69,34 @@ impl RuleEngine {
             window_buffers: HashMap::new(),
             agents: HashMap::new(),
             schema,
+            agent_queue: Some(agent_queue),
+            circuit_breakers: HashMap::new(),
         }
+    }
+    
+    pub fn get_or_create_circuit_breaker(&mut self, agent_name: &str) -> Arc<CircuitBreaker> {
+        self.circuit_breakers
+            .entry(agent_name.to_string())
+            .or_insert_with(|| {
+                Arc::new(CircuitBreaker::new(
+                    5, // 5 failures before opening
+                    std::time::Duration::from_secs(30),
+                ))
+            })
+            .clone()
     }
 
     pub async fn from_config(config: FuseRuleConfig) -> Result<Self> {
-        // 1. Build Schema
+        // 1. Build Schema (with evolution support - fields can be added/removed)
         let mut fields = Vec::new();
         for f in config.schema {
             let dt = match f.data_type.as_str() {
                 "int32" => arrow::datatypes::DataType::Int32,
+                "int64" => arrow::datatypes::DataType::Int64,
+                "float32" => arrow::datatypes::DataType::Float32,
                 "float64" => arrow::datatypes::DataType::Float64,
                 "bool" => arrow::datatypes::DataType::Boolean,
+                "utf8" | "string" => arrow::datatypes::DataType::Utf8,
                 _ => arrow::datatypes::DataType::Utf8,
             };
             fields.push(arrow::datatypes::Field::new(f.name, dt, true));
@@ -76,7 +109,9 @@ impl RuleEngine {
             &config.engine.persistence_path,
         )?);
 
-        let mut engine = Self::new(evaluator, state, Arc::clone(&schema));
+        let max_pending = config.engine.max_pending_batches;
+        let agent_concurrency = config.engine.agent_concurrency;
+        let mut engine = Self::new(evaluator, state, Arc::clone(&schema), max_pending, agent_concurrency);
 
         // 3. Add Agents
         for agent_cfg in config.agents {
@@ -106,6 +141,7 @@ impl RuleEngine {
                     action: r_cfg.action,
                     window_seconds: r_cfg.window_seconds,
                     version: r_cfg.version,
+                    enabled: r_cfg.enabled,
                 })
                 .await?;
         }
@@ -118,19 +154,26 @@ impl RuleEngine {
 
         // 1. Update Agents
         let mut new_agents = HashMap::new();
+        let mut new_circuit_breakers = HashMap::new();
         for agent_cfg in config.agents {
             match agent_cfg.r#type.as_str() {
                 "logger" => {
                     new_agents.insert(
-                        agent_cfg.name,
+                        agent_cfg.name.clone(),
                         Arc::new(crate::agent::LoggerAgent) as Arc<dyn Agent>,
                     );
                 }
                 "webhook" => {
                     if let Some(url) = agent_cfg.url {
+                        let agent_name = agent_cfg.name.clone();
                         new_agents.insert(
-                            agent_cfg.name,
+                            agent_name.clone(),
                             Arc::new(crate::agent::WebhookAgent::new(url)) as Arc<dyn Agent>,
+                        );
+                        // Create circuit breaker for webhook agents
+                        new_circuit_breakers.insert(
+                            agent_name,
+                            Arc::new(CircuitBreaker::new(5, std::time::Duration::from_secs(30))),
                         );
                     }
                 }
@@ -138,6 +181,7 @@ impl RuleEngine {
             }
         }
         self.agents = new_agents;
+        self.circuit_breakers = new_circuit_breakers;
 
         // 2. Update Rules
         let mut new_rules = Vec::new();
@@ -151,6 +195,7 @@ impl RuleEngine {
                 action: r_cfg.action,
                 window_seconds: r_cfg.window_seconds,
                 version: r_cfg.version,
+                enabled: r_cfg.enabled,
             };
 
             // Preserve existing window buffers if possible, otherwise create new
@@ -196,6 +241,8 @@ impl RuleEngine {
     }
 
     pub async fn process_batch(&mut self, batch: &RecordBatch) -> Result<Vec<EvaluationTrace>> {
+        let _start = Instant::now();
+        
         let mut windowed_data = Vec::with_capacity(self.rules.len());
         for rule in &self.rules {
             if let Some(buffer) = self.window_buffers.get(&rule.rule.id) {
@@ -205,82 +252,188 @@ impl RuleEngine {
             }
         }
 
-        let results_with_context = self
+        // Filter to only enabled rules for evaluation, tracking original indices
+        let mut enabled_indices = Vec::new();
+        let mut enabled_compiled_rules = Vec::new();
+        let mut enabled_window_data = Vec::new();
+        
+        for (i, rule) in self.rules.iter().enumerate() {
+            if rule.rule.enabled {
+                enabled_indices.push(i);
+                enabled_compiled_rules.push(rule.clone());
+                enabled_window_data.push(
+                    windowed_data.get(i).cloned().unwrap_or_default()
+                );
+            }
+        }
+
+        // Parallel rule evaluation using tokio::join_all
+        let evaluation_start = Instant::now();
+        let results_with_context = match self
             .evaluator
-            .evaluate_batch(batch, &self.rules, &windowed_data)
-            .await?;
+            .evaluate_batch(batch, &enabled_compiled_rules, &enabled_window_data)
+            .await
+        {
+            Ok(results) => {
+                let eval_duration = evaluation_start.elapsed();
+                crate::metrics::METRICS.record_evaluation_duration(eval_duration.as_secs_f64());
+                results
+            }
+            Err(e) => {
+                error!("Rule evaluation error: {}", e);
+                crate::metrics::METRICS.record_evaluation_error();
+                return Err(e);
+            }
+        };
         crate::metrics::METRICS
             .batches_processed
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut traces = Vec::new();
 
-        for (i, (result, context)) in results_with_context.into_iter().enumerate() {
-            let rule = &self.rules[i].rule;
-            let transition = self.state.update_result(&rule.id, result).await?;
+        // Process enabled rules and create traces for all rules (disabled ones get None transition)
+        let enabled_count = enabled_indices.len();
+        let mut enabled_results_iter = results_with_context.into_iter();
+        let mut enabled_idx_iter = enabled_indices.into_iter();
+        
+        // Record per-rule evaluation duration (approximate by dividing total time)
+        // In a more sophisticated implementation, we'd track each rule individually
+        let eval_duration = evaluation_start.elapsed();
+        let per_rule_duration = if enabled_count > 0 {
+            eval_duration.as_secs_f64() / enabled_count as f64
+        } else {
+            0.0
+        };
+        
+        for (_i, rule) in self.rules.iter().enumerate() {
+            if rule.rule.enabled {
+                let original_idx = enabled_idx_iter.next().unwrap();
+                let (result, context) = enabled_results_iter.next().unwrap();
+                let rule = &self.rules[original_idx].rule;
+                
+                // Record rule evaluation
+                crate::metrics::METRICS.record_rule_evaluation(&rule.id);
+                // Record per-rule evaluation duration histogram
+                crate::metrics::METRICS.record_rule_evaluation_duration(&rule.id, per_rule_duration);
+                
+                let transition = self.state.update_result(&rule.id, result).await?;
 
-            if transition != RuleTransition::None {
-                info!(
-                    "Rule '{}' ({} v{}): {:?} -> {:?}",
-                    rule.name, rule.id, rule.version, result, transition
-                );
-            }
+                if transition != RuleTransition::None {
+                    info!(
+                        "Rule '{}' ({} v{}): {:?} -> {:?}",
+                        rule.name, rule.id, rule.version, result, transition
+                    );
+                }
 
-            let mut agent_status = None;
-            let mut action_fired = false;
+                let mut agent_status = None;
+                let mut action_fired = false;
 
-            if let RuleTransition::Activated = transition {
-                action_fired = true;
-                crate::metrics::METRICS
-                    .activations_total
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let activation = Activation {
-                    rule_id: rule.id.clone(),
-                    rule_name: rule.name.clone(),
-                    action: rule.action.clone(),
-                    context,
-                };
+                if let RuleTransition::Activated = transition {
+                    action_fired = true;
+                    crate::metrics::METRICS
+                        .activations_total
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    crate::metrics::METRICS.record_rule_activation(&rule.id);
+                    let activation = Activation {
+                        rule_id: rule.id.clone(),
+                        rule_name: rule.name.clone(),
+                        action: rule.action.clone(),
+                        context,
+                    };
 
-                if let Some(agent) = self.agents.get(&rule.action) {
-                    match agent.execute(&activation).await {
-                        Ok(_) => {
-                            debug!(
-                                "Agent '{}' executed successfully for rule '{}'",
-                                rule.action, rule.id
+                    // Use async agent queue if available, otherwise execute synchronously
+                    if let Some(agent_queue) = &self.agent_queue {
+                        if let Some(agent) = self.agents.get(&rule.action) {
+                            let circuit_breaker = self.circuit_breakers
+                                .get(&rule.action)
+                                .cloned();
+                            
+                            // Get DLQ sender from queue
+                            let dlq_sender = Some(agent_queue.dlq_sender.clone());
+                            
+                            let task = AgentTask::new(
+                                activation,
+                                agent.clone(),
+                                3, // max_retries
+                                circuit_breaker,
+                                dlq_sender,
                             );
-                            agent_status = Some("success".to_string());
+                            
+                            if let Err(e) = agent_queue.enqueue(task).await {
+                                error!("Failed to enqueue agent task: {}", e);
+                                agent_status = Some(format!("enqueue_failed: {}", e));
+                                crate::metrics::METRICS
+                                    .agent_failures
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            } else {
+                                agent_status = Some("queued".to_string());
+                            }
+                        } else {
+                            agent_status = Some("agent_not_found".to_string());
+                            crate::metrics::METRICS
+                                .agent_failures
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
-                        Err(e) => {
-                            error!("Error executing agent '{}': {}", rule.action, e);
-                            agent_status = Some(format!("failed: {}", e));
+                    } else {
+                        // Fallback to synchronous execution
+                        if let Some(agent) = self.agents.get(&rule.action) {
+                            match agent.execute(&activation).await {
+                                Ok(_) => {
+                                    debug!(
+                                        "Agent '{}' executed successfully for rule '{}'",
+                                        rule.action, rule.id
+                                    );
+                                    agent_status = Some("success".to_string());
+                                }
+                                Err(e) => {
+                                    error!("Error executing agent '{}': {}", rule.action, e);
+                                    agent_status = Some(format!("failed: {}", e));
+                                    crate::metrics::METRICS
+                                        .agent_failures
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                }
+                            }
+                        } else {
+                            agent_status = Some("agent_not_found".to_string());
                             crate::metrics::METRICS
                                 .agent_failures
                                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
                     }
-                } else {
-                    agent_status = Some("agent_not_found".to_string());
-                    crate::metrics::METRICS
-                        .agent_failures
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
-            }
 
-            traces.push(EvaluationTrace {
-                rule_id: rule.id.clone(),
-                rule_name: rule.name.clone(),
-                rule_version: rule.version,
-                result,
-                transition: match transition {
-                    RuleTransition::None => "None".to_string(),
-                    RuleTransition::Activated => "Activated".to_string(),
-                    RuleTransition::Deactivated => "Deactivated".to_string(),
-                },
-                action_fired,
-                agent_status,
-            });
+                traces.push(EvaluationTrace {
+                    rule_id: rule.id.clone(),
+                    rule_name: rule.name.clone(),
+                    rule_version: rule.version,
+                    result,
+                    transition: match transition {
+                        RuleTransition::None => "None".to_string(),
+                        RuleTransition::Activated => "Activated".to_string(),
+                        RuleTransition::Deactivated => {
+                            crate::metrics::METRICS.record_deactivation();
+                            "Deactivated".to_string()
+                        }
+                    },
+                    action_fired,
+                    agent_status,
+                });
 
-            if let Some(buffer) = self.window_buffers.get_mut(&rule.id) {
-                buffer.add_batch(batch.clone());
+                if let Some(buffer) = self.window_buffers.get_mut(&rule.id) {
+                    buffer.add_batch(batch.clone());
+                }
+            } else {
+                // Disabled rule - create trace with None transition
+                let rule = &rule.rule;
+                let last_result = self.state.get_last_result(&rule.id).await.unwrap_or(PredicateResult::False);
+                traces.push(EvaluationTrace {
+                    rule_id: rule.id.clone(),
+                    rule_name: rule.name.clone(),
+                    rule_version: rule.version,
+                    result: last_result,
+                    transition: "None".to_string(),
+                    action_fired: false,
+                    agent_status: Some("rule_disabled".to_string()),
+                });
             }
         }
 

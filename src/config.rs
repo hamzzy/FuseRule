@@ -19,6 +19,20 @@ pub struct FieldDef {
 #[derive(Debug, Deserialize, Clone)]
 pub struct EngineConfig {
     pub persistence_path: String,
+    #[serde(default = "default_max_pending_batches")]
+    pub max_pending_batches: usize, // Backpressure: max batches queued before blocking
+    #[serde(default = "default_agent_concurrency")]
+    pub agent_concurrency: usize, // Number of concurrent agent workers
+    #[serde(default)]
+    pub ingest_rate_limit: Option<u32>, // Rate limit: requests per second (None = unlimited)
+}
+
+fn default_max_pending_batches() -> usize {
+    1000
+}
+
+fn default_agent_concurrency() -> usize {
+    10
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -30,6 +44,12 @@ pub struct RuleConfig {
     pub window_seconds: Option<u64>,
     #[serde(default = "default_version")]
     pub version: u32,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 fn default_version() -> u32 {

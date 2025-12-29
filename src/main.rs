@@ -48,8 +48,13 @@ async fn main() -> Result<()> {
             // 3. (Optional) In a real product, we'd add the rules from the config here too
             // For this version, let's assume the user wants the server to start.
 
-            // 4. Start Server
-            let server = FuseRuleServer::new(Arc::new(RwLock::new(engine)), config.to_string());
+            // 4. Start Server with rate limiting
+            let rate_limit = config_data.engine.ingest_rate_limit;
+            let server = FuseRuleServer::new(
+                Arc::new(RwLock::new(engine)),
+                config.to_string(),
+                rate_limit,
+            );
             server.run(*port).await?;
         }
     }
