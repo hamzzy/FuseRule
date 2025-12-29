@@ -1,10 +1,10 @@
-use clap::{Parser, Subcommand};
-use arrow_rule_agent::RuleEngine;
+use anyhow::Result;
 use arrow_rule_agent::config::FuseRuleConfig;
 use arrow_rule_agent::server::FuseRuleServer;
+use arrow_rule_agent::RuleEngine;
+use clap::{Parser, Subcommand};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use anyhow::Result;
 
 #[derive(Parser)]
 #[command(name = "fuserule")]
@@ -32,23 +32,22 @@ enum Commands {
 async fn main() -> Result<()> {
     // 0. Initialize Tracing
     tracing_subscriber::fmt::init();
-    
+
     let args = Cli::parse();
 
     match &args.command {
         Commands::Run { config, port } => {
             println!("🔥 Initializing FuseRule Daemon...");
-            
+
             // 1. Load Config
             let config_data = FuseRuleConfig::from_file(config)?;
-            
+
             // 2. Build Engine
             let engine = RuleEngine::from_config(config_data.clone()).await?;
-            
+
             // 3. (Optional) In a real product, we'd add the rules from the config here too
             // For this version, let's assume the user wants the server to start.
-            
-            
+
             // 4. Start Server
             let server = FuseRuleServer::new(Arc::new(RwLock::new(engine)), config.to_string());
             server.run(*port).await?;

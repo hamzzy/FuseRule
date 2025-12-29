@@ -35,9 +35,7 @@ impl SystemMetrics {
              # HELP fuserule_agent_failures_total Total number of failed agent executions.\n\
              # TYPE fuserule_agent_failures_total counter\n\
              fuserule_agent_failures_total {}\n",
-            snapshot.batches_processed,
-            snapshot.activations_total,
-            snapshot.agent_failures
+            snapshot.batches_processed, snapshot.activations_total, snapshot.agent_failures
         )
     }
 }

@@ -24,9 +24,19 @@ impl Agent for LoggerAgent {
     }
 
     async fn execute(&self, activation: &Activation) -> anyhow::Result<()> {
-        let rows = activation.context.as_ref().map(|b| b.num_rows()).unwrap_or(0);
-        println!("[Agent: {}] Firing action '{}' for rule '{}' ({}) - Context: {} rows matched", 
-            self.name(), activation.action, activation.rule_name, activation.rule_id, rows);
+        let rows = activation
+            .context
+            .as_ref()
+            .map(|b| b.num_rows())
+            .unwrap_or(0);
+        println!(
+            "[Agent: {}] Firing action '{}' for rule '{}' ({}) - Context: {} rows matched",
+            self.name(),
+            activation.action,
+            activation.rule_name,
+            activation.rule_id,
+            rows
+        );
         Ok(())
     }
 }
@@ -61,13 +71,10 @@ impl Agent for WebhookAgent {
         });
 
         println!("[Agent: webhook] Sending POST to {}...", self.url);
-        
+
         // In a real production system, we might want to handle retries here
-        self.client.post(&self.url)
-            .json(&payload)
-            .send()
-            .await?;
-            
+        self.client.post(&self.url).json(&payload).send().await?;
+
         Ok(())
     }
 }

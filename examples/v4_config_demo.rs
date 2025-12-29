@@ -1,13 +1,13 @@
-use arrow_rule_agent::RuleEngine;
+use anyhow::Result;
+use arrow::array::{Float64Array, Int32Array};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
 use arrow_rule_agent::config::{FuseRuleConfig, RuleConfig};
 use arrow_rule_agent::rule::Rule;
-use arrow::record_batch::RecordBatch;
-use arrow::array::{Float64Array, Int32Array};
-use arrow::datatypes::{Schema, Field, DataType};
+use arrow_rule_agent::RuleEngine;
 use std::sync::Arc;
-use anyhow::Result;
-use tokio::net::TcpListener;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,7 +29,9 @@ async fn main() -> Result<()> {
                     let body = request.split("\r\n\r\n").last().unwrap_or("");
                     println!("📦 Payload: {}", body);
                     // Send 200 OK
-                    let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").await;
+                    let _ = socket
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                        .await;
                 }
             });
         }
@@ -37,7 +39,11 @@ async fn main() -> Result<()> {
 
     // 2. Load Config from YAML
     let config = FuseRuleConfig::from_file("fuse_rule_config.yaml")?;
-    println!("📖 Config loaded: {} rules, {} agents", config.rules.len(), config.agents.len());
+    println!(
+        "📖 Config loaded: {} rules, {} agents",
+        config.rules.len(),
+        config.agents.len()
+    );
 
     // 3. Initialize Engine (Rules and Agents are loaded here)
     let mut engine = RuleEngine::from_config(config.clone()).await?;

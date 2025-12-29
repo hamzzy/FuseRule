@@ -1,6 +1,6 @@
+use anyhow::Result;
 use serde::Deserialize;
 use std::path::Path;
-use anyhow::Result;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct FuseRuleConfig {
@@ -32,7 +32,9 @@ pub struct RuleConfig {
     pub version: u32,
 }
 
-fn default_version() -> u32 { 1 }
+fn default_version() -> u32 {
+    1
+}
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AgentConfig {
@@ -46,7 +48,7 @@ impl FuseRuleConfig {
         let settings = config::Config::builder()
             .add_source(config::File::from(path.as_ref()))
             .build()?;
-        
+
         let config: FuseRuleConfig = settings.try_deserialize()?;
         config.validate()?;
         Ok(config)
@@ -69,7 +71,11 @@ impl FuseRuleConfig {
                 anyhow::bail!("Duplicate rule ID: {}", rule.id);
             }
             if !agent_names.contains(&rule.action) {
-                anyhow::bail!("Rule '{}' references unknown agent '{}'", rule.id, rule.action);
+                anyhow::bail!(
+                    "Rule '{}' references unknown agent '{}'",
+                    rule.id,
+                    rule.action
+                );
             }
             if rule.predicate.trim().is_empty() {
                 anyhow::bail!("Rule '{}' has an empty predicate", rule.id);

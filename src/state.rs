@@ -1,7 +1,7 @@
-use std::path::Path;
-use sled::Db;
 use anyhow::Result;
 use async_trait::async_trait;
+use sled::Db;
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PredicateResult {
@@ -12,14 +12,18 @@ pub enum PredicateResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleTransition {
     None,
-    Activated, // False -> True
+    Activated,   // False -> True
     Deactivated, // True -> False
 }
 
 #[async_trait]
 pub trait StateStore: Send + Sync {
     async fn get_last_result(&self, rule_id: &str) -> Result<PredicateResult>;
-    async fn update_result(&self, rule_id: &str, current: PredicateResult) -> Result<RuleTransition>;
+    async fn update_result(
+        &self,
+        rule_id: &str,
+        current: PredicateResult,
+    ) -> Result<RuleTransition>;
 }
 
 pub struct SledStateStore {
@@ -38,7 +42,7 @@ impl StateStore for SledStateStore {
     async fn get_last_result(&self, rule_id: &str) -> Result<PredicateResult> {
         let key = format!("rule_state:{}", rule_id);
         let last_bytes = self.db.get(&key)?;
-        
+
         if let Some(bytes) = last_bytes {
             Ok(serde_json::from_slice(&bytes)?)
         } else {
@@ -46,7 +50,11 @@ impl StateStore for SledStateStore {
         }
     }
 
-    async fn update_result(&self, rule_id: &str, current: PredicateResult) -> Result<RuleTransition> {
+    async fn update_result(
+        &self,
+        rule_id: &str,
+        current: PredicateResult,
+    ) -> Result<RuleTransition> {
         let last_result = self.get_last_result(rule_id).await?;
 
         let transition = match (last_result, current) {
@@ -58,7 +66,7 @@ impl StateStore for SledStateStore {
         let key = format!("rule_state:{}", rule_id);
         let current_bytes = serde_json::to_vec(&current)?;
         self.db.insert(key, current_bytes)?;
-        
+
         Ok(transition)
     }
 }
