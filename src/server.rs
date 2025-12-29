@@ -63,25 +63,34 @@ async fn handle_ingest(
     // To keep it robust, we'll return the activations.
     
     let schema = engine_lock.schema();
-    let mut reader = ReaderBuilder::new(schema).build(cursor).unwrap();
+    let reader = ReaderBuilder::new(schema).build(cursor).unwrap();
     
-    let mut all_activations = Vec::new();
-    while let Some(Ok(batch)) = reader.next() {
-        println!("  Ingested batch with {} rows", batch.num_rows());
-        match engine_lock.process_batch(&batch).await {
-            Ok(activations) => {
-                println!("  Engine returned {} activations", activations.len());
-                all_activations.extend(activations);
+    let mut all_traces = Vec::new();
+    let iter = reader.into_iter();
+    for batch_result in iter {
+        match batch_result {
+            Ok(batch) => {
+                println!("  Ingested batch with {} rows", batch.num_rows());
+                match engine_lock.process_batch(&batch).await {
+                    Ok(traces) => {
+                        println!("  Engine processed batch: {} rules evaluated", traces.len());
+                        all_traces.extend(traces);
+                    },
+                    Err(e) => {
+                        eprintln!("  Engine error: {}", e);
+                        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })));
+                    }
+                }
             },
             Err(e) => {
-                eprintln!("  Engine error: {}", e);
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })));
+                eprintln!("  Reader error: {}", e);
+                return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": format!("JSON Reader error: {}", e) })));
             }
         }
     }
 
     (StatusCode::OK, Json(serde_json::json!({ 
         "message": "Processed", 
-        "activations_count": all_activations.len() 
+        "traces": all_traces 
     })))
 }

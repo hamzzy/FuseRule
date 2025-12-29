@@ -1,5 +1,7 @@
 use std::path::Path;
 use sled::Db;
+use anyhow::Result;
+use async_trait::async_trait;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PredicateResult {
@@ -7,31 +9,45 @@ pub enum PredicateResult {
     False,
 }
 
-pub struct EngineState {
-    db: Db,
-}
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleTransition {
     None,
     Activated, // False -> True
     Deactivated, // True -> False
 }
 
-impl EngineState {
-    pub fn new<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+#[async_trait]
+pub trait StateStore: Send + Sync {
+    async fn get_last_result(&self, rule_id: &str) -> Result<PredicateResult>;
+    async fn update_result(&self, rule_id: &str, current: PredicateResult) -> Result<RuleTransition>;
+}
+
+pub struct SledStateStore {
+    db: Db,
+}
+
+impl SledStateStore {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let db = sled::open(path)?;
         Ok(Self { db })
     }
+}
 
-    pub fn update_rule(&mut self, rule_id: &str, current: PredicateResult) -> anyhow::Result<RuleTransition> {
+#[async_trait]
+impl StateStore for SledStateStore {
+    async fn get_last_result(&self, rule_id: &str) -> Result<PredicateResult> {
         let key = format!("rule_state:{}", rule_id);
         let last_bytes = self.db.get(&key)?;
         
-        let last_result = if let Some(bytes) = last_bytes {
-            serde_json::from_slice(&bytes)?
+        if let Some(bytes) = last_bytes {
+            Ok(serde_json::from_slice(&bytes)?)
         } else {
-            PredicateResult::False
-        };
+            Ok(PredicateResult::False)
+        }
+    }
+
+    async fn update_result(&self, rule_id: &str, current: PredicateResult) -> Result<RuleTransition> {
+        let last_result = self.get_last_result(rule_id).await?;
 
         let transition = match (last_result, current) {
             (PredicateResult::False, PredicateResult::True) => RuleTransition::Activated,
@@ -39,6 +55,7 @@ impl EngineState {
             _ => RuleTransition::None,
         };
 
+        let key = format!("rule_state:{}", rule_id);
         let current_bytes = serde_json::to_vec(&current)?;
         self.db.insert(key, current_bytes)?;
         

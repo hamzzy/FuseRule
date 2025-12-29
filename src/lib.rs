@@ -8,40 +8,51 @@ pub mod server;
 
 use arrow::record_batch::RecordBatch;
 use crate::rule::Rule;
-use crate::state::{EngineState, RuleTransition};
+use crate::state::{StateStore, RuleTransition, PredicateResult};
 use crate::agent::{Activation, Agent};
-use crate::evaluator::{DataFusionEvaluator, CompiledPhysicalRule};
+use crate::evaluator::{RuleEvaluator, CompiledRuleEdge};
 use crate::window::WindowBuffer;
 use crate::config::FuseRuleConfig;
 use anyhow::Result;
-use std::path::Path;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// A trace of what happened during an evaluation batch (Principle 4: Observability)
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EvaluationTrace {
+    pub rule_id: String,
+    pub rule_name: String,
+    pub result: PredicateResult,
+    pub transition: String, // "None", "Activated", "Deactivated"
+    pub action_fired: bool,
+}
+
 pub struct RuleEngine {
-    evaluator: DataFusionEvaluator,
-    rules: Vec<CompiledPhysicalRule>,
-    state: EngineState,
+    evaluator: Box<dyn RuleEvaluator>,
+    state: Box<dyn StateStore>,
+    rules: Vec<CompiledRuleEdge>,
     window_buffers: HashMap<String, WindowBuffer>,
     agents: HashMap<String, Arc<dyn Agent>>,
     schema: Arc<arrow::datatypes::Schema>,
 }
 
 impl RuleEngine {
-    pub fn new<P: AsRef<Path>>(persistence_path: P) -> Result<Self> {
-        Ok(Self {
-            evaluator: DataFusionEvaluator::new(),
+    pub fn new(
+        evaluator: Box<dyn RuleEvaluator>, 
+        state: Box<dyn StateStore>,
+        schema: Arc<arrow::datatypes::Schema>
+    ) -> Self {
+        Self {
+            evaluator,
+            state,
             rules: Vec::new(),
-            state: EngineState::new(persistence_path)?,
             window_buffers: HashMap::new(),
             agents: HashMap::new(),
-            schema: Arc::new(arrow::datatypes::Schema::empty()),
-        })
+            schema,
+        }
     }
 
-    pub fn from_config(config: FuseRuleConfig) -> Result<Self> {
-        let mut engine = Self::new(&config.engine.persistence_path)?;
-        
+    pub async fn from_config(config: FuseRuleConfig) -> Result<Self> {
         // 1. Build Schema
         let mut fields = Vec::new();
         for f in config.schema {
@@ -54,9 +65,14 @@ impl RuleEngine {
             fields.push(arrow::datatypes::Field::new(f.name, dt, true));
         }
         let schema = Arc::new(arrow::datatypes::Schema::new(fields));
-        engine.schema = Arc::clone(&schema);
 
-        // 2. Add Agents
+        // 2. Build Components (Edges)
+        let evaluator = Box::new(crate::evaluator::DataFusionEvaluator::new());
+        let state = Box::new(crate::state::SledStateStore::new(&config.engine.persistence_path)?);
+
+        let mut engine = Self::new(evaluator, state, Arc::clone(&schema));
+
+        // 3. Add Agents
         for agent_cfg in config.agents {
             match agent_cfg.r#type.as_str() {
                 "logger" => {
@@ -71,7 +87,7 @@ impl RuleEngine {
             }
         }
 
-        // 3. Add Rules
+        // 4. Add Rules
         for r_cfg in config.rules {
             engine.add_rule(Rule {
                 id: r_cfg.id,
@@ -79,7 +95,7 @@ impl RuleEngine {
                 predicate: r_cfg.predicate,
                 action: r_cfg.action,
                 window_seconds: r_cfg.window_seconds,
-            }, &schema)?;
+            }).await?;
         }
 
         Ok(engine)
@@ -93,16 +109,16 @@ impl RuleEngine {
         self.agents.insert(name, agent);
     }
 
-    pub fn add_rule(&mut self, rule: Rule, schema: &arrow::datatypes::Schema) -> Result<()> {
+    pub async fn add_rule(&mut self, rule: Rule) -> Result<()> {
         if let Some(secs) = rule.window_seconds {
             self.window_buffers.insert(rule.id.clone(), WindowBuffer::new(secs));
         }
-        let compiled = self.evaluator.compile(rule, schema)?;
+        let compiled = self.evaluator.compile(rule, &self.schema)?;
         self.rules.push(compiled);
         Ok(())
     }
 
-    pub async fn process_batch(&mut self, batch: &RecordBatch) -> Result<Vec<Activation>> {
+    pub async fn process_batch(&mut self, batch: &RecordBatch) -> Result<Vec<EvaluationTrace>> {
         let mut windowed_data = Vec::with_capacity(self.rules.len());
         for rule in &self.rules {
             if let Some(buffer) = self.window_buffers.get(&rule.rule.id) {
@@ -113,12 +129,18 @@ impl RuleEngine {
         }
 
         let results_with_context = self.evaluator.evaluate_batch(batch, &self.rules, &windowed_data).await?;
-        let mut activations = Vec::new();
+        println!("  Evaluator returned {} results for {} rules", results_with_context.len(), self.rules.len());
+        let mut traces = Vec::new();
 
         for (i, (result, context)) in results_with_context.into_iter().enumerate() {
             let rule = &self.rules[i].rule;
-            let transition = self.state.update_rule(&rule.id, result)?;
+            let transition = self.state.update_result(&rule.id, result).await?;
+            
+            if transition != RuleTransition::None {
+                println!("  [Engine] Rule '{}' ({}): {:?} -> {:?}", rule.name, rule.id, result, transition);
+            }
 
+            let mut action_fired = false;
             if let RuleTransition::Activated = transition {
                 let activation = Activation {
                     rule_id: rule.id.clone(),
@@ -127,25 +149,35 @@ impl RuleEngine {
                     context,
                 };
                 
-                // Fire agents mapped to this action
                 if let Some(agent) = self.agents.get(&rule.action) {
                     let agent_clone = Arc::clone(agent);
                     let activation_clone = activation.clone();
+                    action_fired = true;
                     tokio::spawn(async move {
                         if let Err(e) = agent_clone.execute(&activation_clone).await {
                             eprintln!("Error executing agent: {}", e);
                         }
                     });
                 }
-
-                activations.push(activation);
             }
+
+            traces.push(EvaluationTrace {
+                rule_id: rule.id.clone(),
+                rule_name: rule.name.clone(),
+                result,
+                transition: match transition {
+                    RuleTransition::None => "None".to_string(),
+                    RuleTransition::Activated => "Activated".to_string(),
+                    RuleTransition::Deactivated => "Deactivated".to_string(),
+                },
+                action_fired,
+            });
 
             if let Some(buffer) = self.window_buffers.get_mut(&rule.id) {
                 buffer.add_batch(batch.clone());
             }
         }
 
-        Ok(activations)
+        Ok(traces)
     }
 }

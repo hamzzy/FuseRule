@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
     println!("📖 Config loaded: {} rules, {} agents", config.rules.len(), config.agents.len());
 
     // 3. Initialize Engine (Rules and Agents are loaded here)
-    let mut engine = RuleEngine::from_config(config.clone())?;
+    let mut engine = RuleEngine::from_config(config.clone()).await?;
 
     // 4. Setup Data Schema (for manual batch creation)
     let schema = engine.schema();

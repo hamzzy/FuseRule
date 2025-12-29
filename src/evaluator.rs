@@ -2,9 +2,20 @@ use anyhow::{Result, Context};
 use arrow::record_batch::RecordBatch;
 use arrow::array::Array;
 use datafusion::prelude::*;
-use datafusion::logical_expr::Expr;
+use async_trait::async_trait;
 use crate::rule::Rule;
 use crate::state::PredicateResult;
+
+#[async_trait]
+pub trait RuleEvaluator: Send + Sync {
+    fn compile(&self, rule: Rule, schema: &arrow::datatypes::Schema) -> Result<CompiledRuleEdge>;
+    async fn evaluate_batch(
+        &self, 
+        batch: &RecordBatch, 
+        rules: &[CompiledRuleEdge],
+        window_batches: &[Vec<RecordBatch>]
+    ) -> Result<Vec<(PredicateResult, Option<RecordBatch>)>>;
+}
 
 pub struct DataFusionEvaluator {
     ctx: SessionContext,
@@ -16,26 +27,31 @@ impl DataFusionEvaluator {
             ctx: SessionContext::new(),
         }
     }
+}
 
-    pub fn compile(&self, rule: Rule, schema: &arrow::datatypes::Schema) -> Result<CompiledPhysicalRule> {
-        // DataFusion uses SQL-like expressions. 
-        // We can parse the string predicate into an Expr.
+pub struct CompiledRuleEdge {
+    pub rule: Rule,
+    pub internal_expr: Option<datafusion::logical_expr::Expr>, // Edge-specific data
+}
+
+#[async_trait]
+impl RuleEvaluator for DataFusionEvaluator {
+    fn compile(&self, rule: Rule, schema: &arrow::datatypes::Schema) -> Result<CompiledRuleEdge> {
         let df_schema = datafusion::common::DFSchema::try_from(schema.clone())?;
-        
         let expr = self.ctx.parse_sql_expr(&rule.predicate, &df_schema)
             .context("Failed to parse rule predicate")?;
             
-        Ok(CompiledPhysicalRule {
+        Ok(CompiledRuleEdge {
             rule,
-            expr,
+            internal_expr: Some(expr),
         })
     }
 
-    pub async fn evaluate_batch(
+    async fn evaluate_batch(
         &self, 
         batch: &RecordBatch, 
-        rules: &[CompiledPhysicalRule],
-        window_batches: &[Vec<RecordBatch>] // One list of batches per rule window
+        rules: &[CompiledRuleEdge],
+        window_batches: &[Vec<RecordBatch>]
     ) -> Result<Vec<(PredicateResult, Option<RecordBatch>)>> {
         let mut results = Vec::new();
 
@@ -53,12 +69,10 @@ impl DataFusionEvaluator {
                 continue;
             }
 
-            // Register batches as a temporary table for this rule
             let table_name = format!("rule_input_{}", i);
             let df = self.ctx.read_batches(active_batches)?;
             self.ctx.register_table(&table_name, df.into_view())?;
             
-            // Evaluate the predicate using SQL to let the planner handle aggregates/filters correctly
             let sql = format!("SELECT ({}) as match_result FROM {}", rule.rule.predicate, table_name);
             let select_df = self.ctx.sql(&sql).await?;
             let result_batches = select_df.collect().await?;
@@ -79,17 +93,11 @@ impl DataFusionEvaluator {
                 results.push((PredicateResult::False, None));
             }
             
-            // Clean up table
             self.ctx.deregister_table(&table_name)?;
         }
 
         Ok(results)
     }
-}
-
-pub struct CompiledPhysicalRule {
-    pub rule: Rule,
-    pub expr: Expr,
 }
 
 pub fn infer_json_schema(value: &serde_json::Value) -> arrow::datatypes::Schema {
@@ -98,12 +106,11 @@ pub fn infer_json_schema(value: &serde_json::Value) -> arrow::datatypes::Schema 
             if arr.is_empty() {
                 return arrow::datatypes::Schema::empty();
             }
-            // Simple inference from first element
             let mut fields = Vec::new();
             if let Some(serde_json::Value::Object(map)) = arr.get(0) {
                 for (k, v) in map {
                     let dt = match v {
-                        serde_json::Value::Number(n) if n.is_i64() => arrow::datatypes::DataType::Int32, // Default to i32 for simplicity
+                        serde_json::Value::Number(n) if n.is_i64() => arrow::datatypes::DataType::Int32,
                         serde_json::Value::Number(_) => arrow::datatypes::DataType::Float64,
                         serde_json::Value::Bool(_) => arrow::datatypes::DataType::Boolean,
                         _ => arrow::datatypes::DataType::Utf8,

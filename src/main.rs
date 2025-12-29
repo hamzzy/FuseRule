@@ -41,7 +41,7 @@ async fn main() -> Result<()> {
             let config_data = FuseRuleConfig::from_file(config)?;
             
             // 2. Build Engine
-            let engine = RuleEngine::from_config(config_data.clone())?;
+            let engine = RuleEngine::from_config(config_data.clone()).await?;
             
             // 3. (Optional) In a real product, we'd add the rules from the config here too
             // For this version, let's assume the user wants the server to start.
