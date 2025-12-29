@@ -17,6 +17,7 @@ use crate::config::FuseRuleConfig;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tracing::{info, debug, warn, error};
 
 /// A trace of what happened during an evaluation batch (Principle 4: Observability)
 #[derive(Debug, Clone, serde::Serialize)]
@@ -105,6 +106,60 @@ impl RuleEngine {
         Ok(engine)
     }
 
+    pub async fn reload_from_config(&mut self, config: FuseRuleConfig) -> Result<()> {
+        info!("🔄 Reloading engine configuration...");
+
+        // 1. Update Agents
+        let mut new_agents = HashMap::new();
+        for agent_cfg in config.agents {
+            match agent_cfg.r#type.as_str() {
+                "logger" => {
+                    new_agents.insert(agent_cfg.name, Arc::new(crate::agent::LoggerAgent) as Arc<dyn Agent>);
+                }
+                "webhook" => {
+                    if let Some(url) = agent_cfg.url {
+                        new_agents.insert(agent_cfg.name, Arc::new(crate::agent::WebhookAgent::new(url)) as Arc<dyn Agent>);
+                    }
+                }
+                _ => warn!("Unknown agent type '{}' during reload", agent_cfg.r#type),
+            }
+        }
+        self.agents = new_agents;
+
+        // 2. Update Rules
+        let mut new_rules = Vec::new();
+        let mut new_window_buffers = HashMap::new();
+
+        for r_cfg in config.rules {
+            let rule = Rule {
+                id: r_cfg.id,
+                name: r_cfg.name,
+                predicate: r_cfg.predicate,
+                action: r_cfg.action,
+                window_seconds: r_cfg.window_seconds,
+                version: r_cfg.version,
+            };
+
+            // Preserve existing window buffers if possible, otherwise create new
+            if let Some(secs) = rule.window_seconds {
+                if let Some(existing_buffer) = self.window_buffers.remove(&rule.id) {
+                    new_window_buffers.insert(rule.id.clone(), existing_buffer);
+                } else {
+                    new_window_buffers.insert(rule.id.clone(), WindowBuffer::new(secs));
+                }
+            }
+
+            let compiled = self.evaluator.compile(rule, &self.schema)?;
+            new_rules.push(compiled);
+        }
+
+        self.rules = new_rules;
+        self.window_buffers = new_window_buffers;
+
+        info!("✅ Engine reloaded: {} rules, {} agents", self.rules.len(), self.agents.len());
+        Ok(())
+    }
+
     pub fn schema(&self) -> Arc<arrow::datatypes::Schema> {
         Arc::clone(&self.schema)
     }
@@ -141,7 +196,7 @@ impl RuleEngine {
             let transition = self.state.update_result(&rule.id, result).await?;
             
             if transition != RuleTransition::None {
-                println!("  [Engine] Rule '{}' ({} v{}): {:?} -> {:?}", rule.name, rule.id, rule.version, result, transition);
+                info!("Rule '{}' ({} v{}): {:?} -> {:?}", rule.name, rule.id, rule.version, result, transition);
             }
 
             let mut agent_status = None;
@@ -159,8 +214,12 @@ impl RuleEngine {
                 
                 if let Some(agent) = self.agents.get(&rule.action) {
                     match agent.execute(&activation).await {
-                        Ok(_) => agent_status = Some("success".to_string()),
+                        Ok(_) => {
+                            debug!("Agent '{}' executed successfully for rule '{}'", rule.action, rule.id);
+                            agent_status = Some("success".to_string());
+                        }
                         Err(e) => {
+                            error!("Error executing agent '{}': {}", rule.action, e);
                             agent_status = Some(format!("failed: {}", e));
                             crate::metrics::METRICS.agent_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }

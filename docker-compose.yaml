@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  fuserule:
+    build: .
+    ports:
+      - "3030:3030"
+    volumes:
+      - ./fuserule_state:/app/fuserule_state
+      - ./fuse_rule_config.yaml:/app/fuse_rule_config.yaml
+    restart: unless-stopped
+    environment:
+      - RUST_LOG=info

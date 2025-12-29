@@ -10,16 +10,18 @@ use crate::RuleEngine;
 use serde_json::Value;
 use arrow_json::ReaderBuilder;
 use std::io::Cursor;
+use tracing::{info, error};
 
 pub type SharedEngine = Arc<RwLock<RuleEngine>>;
 
 pub struct FuseRuleServer {
     engine: SharedEngine,
+    config_path: String,
 }
 
 impl FuseRuleServer {
-    pub fn new(engine: SharedEngine) -> Self {
-        Self { engine }
+    pub fn new(engine: SharedEngine, config_path: String) -> Self {
+        Self { engine, config_path }
     }
 
     pub async fn run(self, port: u16) -> anyhow::Result<()> {
@@ -27,14 +29,14 @@ impl FuseRuleServer {
             .route("/status", get(handle_status))
             .route("/metrics", get(handle_metrics))
             .route("/ingest", post(handle_ingest))
-            .with_state(self.engine);
+            .with_state(self.engine.clone());
 
         let addr = format!("0.0.0.0:{}", port);
         let listener = tokio::net::TcpListener::bind(&addr).await?;
-        println!("🚀 FuseRule Server running on http://{}", addr);
+        info!("FuseRule Server running on http://{}", addr);
         
         axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
+            .with_graceful_shutdown(shutdown_signal(self.engine.clone(), self.config_path.clone()))
             .await?;
         
         println!("🛑 FuseRule Server shut down gracefully");
@@ -42,11 +44,12 @@ impl FuseRuleServer {
     }
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal(engine: SharedEngine, config_path: String) {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
             .await
             .expect("failed to install Ctrl+C handler");
+        info!("Termination signal received (Ctrl+C)");
     };
 
     #[cfg(unix)]
@@ -55,14 +58,38 @@ async fn shutdown_signal() {
             .expect("failed to install signal handler")
             .recv()
             .await;
+        info!("Termination signal received (SIGTERM)");
+    };
+
+    #[cfg(unix)]
+    let reload = async {
+        let mut stream = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+            .expect("failed to install SIGHUP handler");
+        while stream.recv().await.is_some() {
+            info!("SIGHUP received, reloading configuration...");
+            match crate::config::FuseRuleConfig::from_file(&config_path) {
+                Ok(new_config) => {
+                    let mut engine_lock = engine.write().await;
+                    if let Err(e) = engine_lock.reload_from_config(new_config).await {
+                        error!("Failed to reload engine: {}", e);
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to load config file for reload: {}", e);
+                }
+            }
+        }
     };
 
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
+    #[cfg(not(unix))]
+    let reload = std::future::pending::<()>();
 
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
+        _ = reload => {},
     }
 }
 
@@ -70,9 +97,8 @@ async fn handle_status() -> (StatusCode, Json<Value>) {
     (StatusCode::OK, Json(serde_json::json!({ "status": "active" })))
 }
 
-async fn handle_metrics() -> (StatusCode, Json<Value>) {
-    let snapshot = crate::metrics::METRICS.snapshot();
-    (StatusCode::OK, Json(serde_json::to_value(&snapshot).unwrap()))
+async fn handle_metrics() -> String {
+    crate::metrics::METRICS.to_prometheus()
 }
 
 async fn handle_ingest(

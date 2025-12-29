@@ -1,5 +1,6 @@
-/target/
+/target
+fuserule_state
+**/*.rs.bk
+.DS_Store
+*.log
 Cargo.lock
-*_state/
-fuserule_state/
-v2_demo_state/

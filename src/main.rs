@@ -30,10 +30,12 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
-    let cli = Cli::parse();
+    // 0. Initialize Tracing
+    tracing_subscriber::fmt::init();
+    
+    let args = Cli::parse();
 
-    match &cli.command {
+    match &args.command {
         Commands::Run { config, port } => {
             println!("🔥 Initializing FuseRule Daemon...");
             
@@ -46,10 +48,9 @@ async fn main() -> Result<()> {
             // 3. (Optional) In a real product, we'd add the rules from the config here too
             // For this version, let's assume the user wants the server to start.
             
-            let shared_engine = Arc::new(RwLock::new(engine));
             
             // 4. Start Server
-            let server = FuseRuleServer::new(shared_engine);
+            let server = FuseRuleServer::new(Arc::new(RwLock::new(engine)), config.to_string());
             server.run(*port).await?;
         }
     }

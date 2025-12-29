@@ -48,6 +48,38 @@ impl FuseRuleConfig {
             .build()?;
         
         let config: FuseRuleConfig = settings.try_deserialize()?;
+        config.validate()?;
         Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let mut agent_names = std::collections::HashSet::new();
+        for agent in &self.agents {
+            if !agent_names.insert(&agent.name) {
+                anyhow::bail!("Duplicate agent name: {}", agent.name);
+            }
+            if agent.r#type == "webhook" && agent.url.is_none() {
+                anyhow::bail!("Webhook agent '{}' missing URL", agent.name);
+            }
+        }
+
+        let mut rule_ids = std::collections::HashSet::new();
+        for rule in &self.rules {
+            if !rule_ids.insert(&rule.id) {
+                anyhow::bail!("Duplicate rule ID: {}", rule.id);
+            }
+            if !agent_names.contains(&rule.action) {
+                anyhow::bail!("Rule '{}' references unknown agent '{}'", rule.id, rule.action);
+            }
+            if rule.predicate.trim().is_empty() {
+                anyhow::bail!("Rule '{}' has an empty predicate", rule.id);
+            }
+        }
+
+        if self.schema.is_empty() {
+            anyhow::bail!("Configuration must define a schema");
+        }
+
+        Ok(())
     }
 }
