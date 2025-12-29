@@ -388,7 +388,12 @@ cargo test --test property_test
 ## 📖 Documentation
 
 - [Architecture Guide](docs/ARCHITECTURE.md) - Deep dive into design
-- [API Documentation](https://docs.rs/arrow-rule-agent) - Full API reference
+- [API Documentation](https://docs.rs/arrow-rule-agent) - Full API reference (when published)
+- **Local API Documentation**: Generate and view locally with:
+  ```bash
+  cargo doc --no-deps --open
+  ```
+  This will build and open the documentation in your browser at `target/doc/arrow_rule_agent/index.html`
 - [Examples](examples/) - Code examples
 
 ## 🤝 Contributing
