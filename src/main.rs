@@ -1,10 +1,12 @@
 use anyhow::Result;
-use arrow_rule_agent::config::FuseRuleConfig;
+use arrow_rule_agent::config::{FuseRuleConfig, SourceConfig};
+use arrow_rule_agent::ingestion::{KafkaIngestion, SharedEngine, WebSocketIngestion};
 use arrow_rule_agent::server::FuseRuleServer;
 use arrow_rule_agent::RuleEngine;
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::info;
 
 #[derive(Parser)]
 #[command(name = "fuserule")]
@@ -48,14 +50,76 @@ async fn main() -> Result<()> {
             // 3. (Optional) In a real product, we'd add the rules from the config here too
             // For this version, let's assume the user wants the server to start.
 
-            // 4. Start Server with rate limiting
+            // 4. Start Server with rate limiting and API key auth
             let rate_limit = config_data.engine.ingest_rate_limit;
+            let api_keys = config_data.engine.api_keys.clone();
+            let shared_engine = Arc::new(RwLock::new(engine));
+            
             let server = FuseRuleServer::new(
-                Arc::new(RwLock::new(engine)),
+                shared_engine.clone(),
                 config.to_string(),
                 rate_limit,
+                api_keys,
             );
-            server.run(*port).await?;
+            
+            // 5. Start data ingestion sources (Kafka, WebSocket)
+            let mut source_handles = Vec::new();
+            for source in &config_data.sources {
+                match source {
+                    SourceConfig::Kafka {
+                        brokers,
+                        topic,
+                        group_id,
+                        auto_commit,
+                    } => {
+                        info!("Starting Kafka ingestion: topic={}, group_id={}", topic, group_id);
+                        let kafka = KafkaIngestion::new(
+                            shared_engine.clone(),
+                            brokers.clone(),
+                            topic.clone(),
+                            group_id.clone(),
+                            *auto_commit,
+                        );
+                        let handle = tokio::spawn(async move {
+                            if let Err(e) = kafka.run().await {
+                                tracing::error!(error = %e, "Kafka ingestion error");
+                            }
+                        });
+                        source_handles.push(handle);
+                    }
+                    SourceConfig::WebSocket { bind, max_connections } => {
+                        info!("Starting WebSocket ingestion: bind={}, max_connections={}", bind, max_connections);
+                        let ws = WebSocketIngestion::new(
+                            shared_engine.clone(),
+                            bind.clone(),
+                            *max_connections,
+                        );
+                        let handle = tokio::spawn(async move {
+                            if let Err(e) = ws.run().await {
+                                tracing::error!(error = %e, "WebSocket ingestion error");
+                            }
+                        });
+                        source_handles.push(handle);
+                    }
+                }
+            }
+            
+            // Start HTTP server and wait for it
+            let server_handle = tokio::spawn(async move {
+                if let Err(e) = server.run(*port).await {
+                    tracing::error!(error = %e, "HTTP server error");
+                }
+            });
+            
+            // Wait for all tasks
+            tokio::select! {
+                _ = server_handle => {},
+                _ = async {
+                    for handle in source_handles {
+                        let _ = handle.await;
+                    }
+                } => {},
+            }
         }
     }
 

@@ -2,13 +2,15 @@ use crate::RuleEngine;
 use crate::evaluator::RuleEvaluator;
 use arrow_json::ReaderBuilder;
 use axum::{
-    extract::{Json, State},
-    http::StatusCode,
+    extract::{Json, Request, State},
+    http::{HeaderMap, StatusCode},
+    middleware::Next,
     response::IntoResponse,
     routing::{get, post},
     Router,
 };
 use serde_json::Value;
+use std::collections::HashSet;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,6 +19,77 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 pub type SharedEngine = Arc<RwLock<RuleEngine>>;
+
+/// API Key Authentication
+#[derive(Clone)]
+pub struct ApiKeyAuth {
+    keys: HashSet<String>,
+}
+
+impl ApiKeyAuth {
+    pub fn new(config_keys: Vec<String>) -> Self {
+        let mut keys = HashSet::new();
+        
+        // Add keys from config file
+        for key in config_keys {
+            keys.insert(key);
+        }
+        
+        // Add keys from environment variables (takes precedence)
+        // FUSERULE_API_KEY - single key
+        if let Ok(env_key) = std::env::var("FUSERULE_API_KEY") {
+            if !env_key.is_empty() {
+                keys.insert(env_key);
+            }
+        }
+        
+        // FUSERULE_API_KEYS - comma-separated keys
+        if let Ok(env_keys) = std::env::var("FUSERULE_API_KEYS") {
+            for key in env_keys.split(',') {
+                let trimmed = key.trim();
+                if !trimmed.is_empty() {
+                    keys.insert(trimmed.to_string());
+                }
+            }
+        }
+        
+        Self { keys }
+    }
+    
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+    
+    pub fn validate(&self, api_key: &str) -> bool {
+        self.keys.contains(api_key)
+    }
+}
+
+/// Authentication middleware
+pub async fn auth_middleware(
+    State(auth): State<ApiKeyAuth>,
+    headers: HeaderMap,
+    request: Request,
+    next: Next,
+) -> Result<axum::response::Response, StatusCode> {
+    // If no API keys configured, allow all requests
+    if auth.is_empty() {
+        return Ok(next.run(request).await);
+    }
+    
+    // Extract API key from header
+    let api_key = headers
+        .get("X-API-Key")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    
+    // Validate API key
+    if !auth.validate(api_key) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    
+    Ok(next.run(request).await)
+}
 
 /// Simple token bucket rate limiter
 struct RateLimiter {
@@ -62,33 +135,57 @@ pub struct FuseRuleServer {
     engine: SharedEngine,
     config_path: String,
     rate_limiter: Option<Arc<RateLimiter>>,
+    api_auth: ApiKeyAuth,
 }
 
 impl FuseRuleServer {
-    pub fn new(engine: SharedEngine, config_path: String, rate_limit: Option<u32>) -> Self {
+    pub fn new(
+        engine: SharedEngine,
+        config_path: String,
+        rate_limit: Option<u32>,
+        api_keys: Vec<String>,
+    ) -> Self {
         let rate_limiter = rate_limit.map(|rps| Arc::new(RateLimiter::new(rps)));
+        let api_auth = ApiKeyAuth::new(api_keys);
         Self {
             engine,
             config_path,
             rate_limiter,
+            api_auth,
         }
     }
 
     pub async fn run(self, port: u16) -> anyhow::Result<()> {
         let rate_limiter = self.rate_limiter.clone();
-        let app = Router::new()
+        let api_auth = self.api_auth.clone();
+        
+        // Public routes (no auth required)
+        let public_routes = Router::new()
             .route("/status", get(handle_status))
             .route("/health", get(handle_health))
-            .route("/metrics", get(handle_metrics))
+            .route("/metrics", get(handle_metrics));
+        
+        // Protected routes (require API key if configured)
+        let protected_routes = Router::new()
             .route("/rules", get(handle_rules))
             .route("/api/v1/rules", post(handle_create_rule))
+            .route("/api/v1/rules/validate", post(handle_validate_rule))
             .route("/api/v1/rules/:rule_id", axum::routing::put(handle_update_rule))
+            .route("/api/v1/rules/:rule_id", axum::routing::patch(handle_patch_rule))
             .route("/api/v1/rules/:rule_id", axum::routing::delete(handle_delete_rule))
             .route("/api/v1/state", get(handle_state))
             .route("/api/v1/state/:rule_id", get(handle_rule_state))
             .route("/ingest", post(move |state, body| {
                 handle_ingest_with_rate_limit(state, body, rate_limiter.clone())
             }))
+            .layer(axum::middleware::from_fn_with_state(
+                api_auth.clone(),
+                auth_middleware,
+            ));
+        
+        let app = Router::new()
+            .merge(public_routes)
+            .merge(protected_routes)
             .with_state(self.engine.clone());
 
         let addr = format!("0.0.0.0:{}", port);
@@ -120,6 +217,56 @@ struct CreateRuleRequest {
     enabled: Option<bool>,
     #[serde(default)]
     dry_run: bool,
+}
+
+async fn handle_validate_rule(
+    State(engine): State<SharedEngine>,
+    Json(req): Json<CreateRuleRequest>,
+) -> impl IntoResponse {
+    use crate::rule::Rule;
+    
+    let rule = Rule {
+        id: req.id.clone(),
+        name: req.name.clone(),
+        predicate: req.predicate.clone(),
+        action: req.action.clone(),
+        window_seconds: req.window_seconds,
+        version: req.version.unwrap_or(1),
+        enabled: req.enabled.unwrap_or(true),
+    };
+    
+    let engine_lock = engine.read().await;
+    let schema = engine_lock.schema();
+    let evaluator = crate::evaluator::DataFusionEvaluator::new();
+    
+    let mut errors = Vec::new();
+    let mut compiled = false;
+    
+    // Validate predicate compilation
+    match evaluator.compile(rule.clone(), &schema) {
+        Ok(_) => {
+            compiled = true;
+        }
+        Err(e) => {
+            errors.push(format!("Predicate compilation failed: {}", e));
+        }
+    }
+    
+    // Validate agent exists (if action specified)
+    if !req.action.is_empty() && !engine_lock.agents.contains_key(&req.action) {
+        errors.push(format!("Agent '{}' not found", req.action));
+    }
+    
+    let valid = errors.is_empty() && compiled;
+    
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "valid": valid,
+            "compiled": compiled,
+            "errors": errors
+        })),
+    )
 }
 
 async fn handle_create_rule(
@@ -194,18 +341,180 @@ async fn handle_create_rule(
 }
 
 async fn handle_update_rule(
-    State(_engine): State<SharedEngine>,
-    axum::extract::Path(_rule_id): axum::extract::Path<String>,
-    Json(_req): Json<serde_json::Value>,
+    State(engine): State<SharedEngine>,
+    axum::extract::Path(rule_id): axum::extract::Path<String>,
+    Json(req): Json<CreateRuleRequest>,
 ) -> impl IntoResponse {
-    // For now, update requires removing and re-adding (simplified)
-    // In production, you'd want more sophisticated update logic
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(serde_json::json!({
-            "message": "Rule update not yet implemented. Use DELETE + POST instead."
-        })),
-    )
+    use crate::rule::Rule;
+    
+    // Ensure the rule_id in path matches the id in body
+    if req.id != rule_id {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "Rule ID in path does not match ID in body",
+                "path_id": rule_id,
+                "body_id": req.id
+            })),
+        );
+    }
+    
+    let rule = Rule {
+        id: req.id.clone(),
+        name: req.name.clone(),
+        predicate: req.predicate.clone(),
+        action: req.action.clone(),
+        window_seconds: req.window_seconds,
+        version: req.version.unwrap_or(1),
+        enabled: req.enabled.unwrap_or(true),
+    };
+    
+    // Validate rule by attempting to compile it
+    let engine_lock = engine.read().await;
+    let schema = engine_lock.schema();
+    let evaluator = crate::evaluator::DataFusionEvaluator::new();
+    
+    match evaluator.compile(rule.clone(), &schema) {
+        Ok(_) => {
+            // Validation successful
+        }
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Rule compilation failed",
+                    "message": e.to_string()
+                })),
+            );
+        }
+    }
+    
+    drop(engine_lock);
+    
+    // Update rule in engine
+    let mut engine_lock = engine.write().await;
+    match engine_lock.update_rule(&rule_id, rule.clone()).await {
+        Ok(()) => {
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "message": "Rule updated successfully",
+                    "rule": rule
+                })),
+            )
+        }
+        Err(e) => {
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": "Failed to update rule",
+                    "message": e.to_string()
+                })),
+            )
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct PatchRuleRequest {
+    enabled: Option<bool>,
+    action: Option<String>,
+    name: Option<String>,
+    predicate: Option<String>,
+    window_seconds: Option<u64>,
+}
+
+async fn handle_patch_rule(
+    State(engine): State<SharedEngine>,
+    axum::extract::Path(rule_id): axum::extract::Path<String>,
+    Json(req): Json<PatchRuleRequest>,
+) -> impl IntoResponse {
+    let mut engine_lock = engine.write().await;
+    
+    // Find rule
+    let rule_idx = engine_lock.rules.iter().position(|r| r.rule.id == rule_id);
+    if rule_idx.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "Rule not found",
+                "rule_id": rule_id
+            })),
+        );
+    }
+    
+    let rule_idx = rule_idx.unwrap();
+    let mut updated_rule = engine_lock.rules[rule_idx].rule.clone();
+    
+    // Apply partial updates
+    if let Some(enabled) = req.enabled {
+        updated_rule.enabled = enabled;
+    }
+    if let Some(action) = req.action {
+        // Validate agent exists
+        if !engine_lock.agents.contains_key(&action) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Agent not found",
+                    "action": action
+                })),
+            );
+        }
+        updated_rule.action = action;
+    }
+    if let Some(name) = req.name {
+        updated_rule.name = name;
+    }
+    if let Some(predicate) = req.predicate {
+        // Validate predicate compiles
+        let schema = engine_lock.schema();
+        let evaluator = crate::evaluator::DataFusionEvaluator::new();
+        let test_rule = crate::rule::Rule {
+            id: updated_rule.id.clone(),
+            name: updated_rule.name.clone(),
+            predicate: predicate.clone(),
+            action: updated_rule.action.clone(),
+            window_seconds: updated_rule.window_seconds,
+            version: updated_rule.version,
+            enabled: updated_rule.enabled,
+        };
+        if evaluator.compile(test_rule, &schema).is_err() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Invalid predicate",
+                    "predicate": predicate
+                })),
+            );
+        }
+        updated_rule.predicate = predicate;
+    }
+    if let Some(window_seconds) = req.window_seconds {
+        updated_rule.window_seconds = Some(window_seconds);
+    }
+    
+    // Update rule using update_rule method
+    match engine_lock.update_rule(&rule_id, updated_rule.clone()).await {
+        Ok(()) => {
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "message": "Rule updated successfully",
+                    "rule": updated_rule
+                })),
+            )
+        }
+        Err(e) => {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": "Failed to update rule",
+                    "message": e.to_string()
+                })),
+            )
+        }
+    }
 }
 
 async fn handle_delete_rule(

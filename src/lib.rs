@@ -2,6 +2,7 @@ pub mod agent;
 pub mod agent_queue;
 pub mod config;
 pub mod evaluator;
+pub mod ingestion;
 pub mod metrics;
 pub mod rule;
 pub mod server;
@@ -123,7 +124,7 @@ impl RuleEngine {
                     if let Some(url) = agent_cfg.url {
                         engine.add_agent(
                             agent_cfg.name,
-                            Arc::new(crate::agent::WebhookAgent::new(url)),
+                            Arc::new(crate::agent::WebhookAgent::new(url, agent_cfg.template.clone())),
                         );
                     }
                 }
@@ -168,7 +169,7 @@ impl RuleEngine {
                         let agent_name = agent_cfg.name.clone();
                         new_agents.insert(
                             agent_name.clone(),
-                            Arc::new(crate::agent::WebhookAgent::new(url)) as Arc<dyn Agent>,
+                            Arc::new(crate::agent::WebhookAgent::new(url, agent_cfg.template.clone())) as Arc<dyn Agent>,
                         );
                         // Create circuit breaker for webhook agents
                         new_circuit_breakers.insert(
@@ -238,6 +239,50 @@ impl RuleEngine {
         let compiled = self.evaluator.compile(rule, &self.schema)?;
         self.rules.push(compiled);
         Ok(())
+    }
+    
+    pub async fn update_rule(&mut self, rule_id: &str, new_rule: Rule) -> Result<()> {
+        // Find existing rule
+        let rule_idx = self.rules.iter().position(|r| r.rule.id == rule_id);
+        if rule_idx.is_none() {
+            anyhow::bail!("Rule not found: {}", rule_id);
+        }
+        
+        let rule_idx = rule_idx.unwrap();
+        let old_rule = &self.rules[rule_idx].rule;
+        
+        // Preserve window buffer if window_seconds unchanged
+        let preserve_buffer = old_rule.window_seconds == new_rule.window_seconds;
+        let existing_buffer = if preserve_buffer {
+            self.window_buffers.remove(&rule_id)
+        } else {
+            None
+        };
+        
+        // Compile new rule
+        let compiled = self.evaluator.compile(new_rule, &self.schema)?;
+        
+        // Replace rule
+        self.rules[rule_idx] = compiled;
+        
+        // Restore or create window buffer
+        if let Some(buffer) = existing_buffer {
+            self.window_buffers.insert(rule_id.to_string(), buffer);
+        } else if let Some(secs) = self.rules[rule_idx].rule.window_seconds {
+            self.window_buffers.insert(rule_id.to_string(), WindowBuffer::new(secs));
+        }
+        
+        Ok(())
+    }
+    
+    pub async fn toggle_rule(&mut self, rule_id: &str, enabled: bool) -> Result<()> {
+        let rule_idx = self.rules.iter().position(|r| r.rule.id == rule_id);
+        if let Some(idx) = rule_idx {
+            self.rules[idx].rule.enabled = enabled;
+            Ok(())
+        } else {
+            anyhow::bail!("Rule not found: {}", rule_id)
+        }
     }
 
     pub async fn process_batch(&mut self, batch: &RecordBatch) -> Result<Vec<EvaluationTrace>> {

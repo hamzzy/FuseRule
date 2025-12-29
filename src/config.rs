@@ -8,6 +8,8 @@ pub struct FuseRuleConfig {
     pub schema: Vec<FieldDef>,
     pub rules: Vec<RuleConfig>,
     pub agents: Vec<AgentConfig>,
+    #[serde(default)]
+    pub sources: Vec<SourceConfig>, // Data ingestion sources
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -25,6 +27,8 @@ pub struct EngineConfig {
     pub agent_concurrency: usize, // Number of concurrent agent workers
     #[serde(default)]
     pub ingest_rate_limit: Option<u32>, // Rate limit: requests per second (None = unlimited)
+    #[serde(default)]
+    pub api_keys: Vec<String>, // API keys from config file
 }
 
 fn default_max_pending_batches() -> usize {
@@ -61,6 +65,34 @@ pub struct AgentConfig {
     pub name: String,
     pub r#type: String, // "logger", "webhook", etc.
     pub url: Option<String>,
+    pub template: Option<String>, // Handlebars template for webhook payloads
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type")]
+pub enum SourceConfig {
+    #[serde(rename = "kafka")]
+    Kafka {
+        brokers: Vec<String>,
+        topic: String,
+        group_id: String,
+        #[serde(default = "default_auto_commit")]
+        auto_commit: bool,
+    },
+    #[serde(rename = "websocket")]
+    WebSocket {
+        bind: String,
+        #[serde(default = "default_max_connections")]
+        max_connections: usize,
+    },
+}
+
+fn default_auto_commit() -> bool {
+    true
+}
+
+fn default_max_connections() -> usize {
+    1000
 }
 
 impl FuseRuleConfig {

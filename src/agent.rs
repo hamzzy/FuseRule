@@ -59,10 +59,11 @@ impl Agent for LoggerAgent {
 pub struct WebhookAgent {
     pub url: String,
     client: reqwest::Client,
+    template: Option<handlebars::Handlebars<'static>>,
 }
 
 impl WebhookAgent {
-    pub fn new(url: String) -> Self {
+    pub fn new(url: String, template: Option<String>) -> Self {
         // Use connection pooling with proper configuration
         let client = reqwest::Client::builder()
             .pool_max_idle_per_host(10)
@@ -70,9 +71,21 @@ impl WebhookAgent {
             .build()
             .expect("Failed to create HTTP client");
         
+        // Compile Handlebars template if provided
+        let compiled_template = template.and_then(|t| {
+            let mut handlebars = handlebars::Handlebars::new();
+            handlebars.set_strict_mode(true);
+            if handlebars.register_template_string("webhook", &t).is_ok() {
+                Some(handlebars)
+            } else {
+                None
+            }
+        });
+        
         Self {
             url,
             client,
+            template: compiled_template,
         }
     }
 }
@@ -84,20 +97,21 @@ impl Agent for WebhookAgent {
     }
 
     async fn execute(&self, activation: &Activation) -> anyhow::Result<()> {
-        // Build rich payload with matched rows data
-        let mut payload = serde_json::json!({
+        // Build template context
+        let mut context = serde_json::json!({
             "rule_id": activation.rule_id,
             "rule_name": activation.rule_name,
             "action": activation.action,
+            "count": activation.context.as_ref().map(|b| b.num_rows()).unwrap_or(0),
             "matched_rows": activation.context.as_ref().map(|b| b.num_rows()).unwrap_or(0),
             "timestamp": chrono::Utc::now().to_rfc3339(),
         });
 
         // Add matched rows data if available (rich context)
+        let mut matched_data = Vec::new();
         if let Some(batch) = &activation.context {
             // Convert RecordBatch to JSON for rich context
             let schema = batch.schema();
-            let mut rows = Vec::new();
             for row_idx in 0..batch.num_rows() {
                 let mut row = serde_json::Map::new();
                 for col_idx in 0..batch.num_columns() {
@@ -167,14 +181,38 @@ impl Agent for WebhookAgent {
                     };
                     row.insert(field.name().clone(), value);
                 }
-                rows.push(serde_json::Value::Object(row));
+                matched_data.push(serde_json::Value::Object(row));
             }
-            payload.as_object_mut()
+            context.as_object_mut()
                 .unwrap()
-                .insert("matched_data".to_string(), serde_json::Value::Array(rows));
+                .insert("matched_data".to_string(), serde_json::Value::Array(matched_data.clone()));
+            context.as_object_mut()
+                .unwrap()
+                .insert("matched_rows".to_string(), serde_json::Value::Array(matched_data));
         }
 
-        debug!(url = %self.url, rule_id = %activation.rule_id, "Sending webhook with rich context");
+        // Render payload using template or default JSON
+        let payload: serde_json::Value = if let Some(ref template) = self.template {
+            // Use Handlebars template
+            match template.render("webhook", &context) {
+                Ok(rendered) => {
+                    // Try to parse as JSON, fallback to string
+                    serde_json::from_str(&rendered).unwrap_or_else(|_| {
+                        serde_json::json!({ "text": rendered })
+                    })
+                }
+                Err(e) => {
+                    // Template rendering failed, fallback to default JSON
+                    warn!(error = %e, "Template rendering failed, using default payload");
+                    context
+                }
+            }
+        } else {
+            // Use default JSON format
+            context
+        };
+
+        debug!(url = %self.url, rule_id = %activation.rule_id, "Sending webhook");
 
         // In a real production system, we might want to handle retries here
         self.client.post(&self.url).json(&payload).send().await?;
