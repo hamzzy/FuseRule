@@ -405,6 +405,3 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for detai
 - Powered by [DataFusion](https://github.com/apache/datafusion) for SQL evaluation
 - Inspired by the "Hard Core, Soft Edges" philosophy
 
----
-
-**Made with ⚡ by the FuseRule team**
