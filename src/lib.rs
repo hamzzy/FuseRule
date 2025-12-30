@@ -6,7 +6,7 @@
 //! ## Quick Start
 //!
 //! ```no_run
-//! use arrow_rule_agent::{RuleEngine, config::FuseRuleConfig};
+//! use fuse_rule::{RuleEngine, config::FuseRuleConfig};
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! let config = FuseRuleConfig::from_file("fuse_rule_config.yaml")?;
@@ -60,7 +60,7 @@ use tracing::{debug, error, info, warn};
 /// # Example
 ///
 /// ```no_run
-/// # use arrow_rule_agent::RuleEngine;
+/// # use fuse_rule::RuleEngine;
 /// # use arrow::array::Float64Array;
 /// # use arrow::datatypes::{DataType, Field, Schema};
 /// # use arrow::record_batch::RecordBatch;
@@ -107,7 +107,7 @@ pub struct EvaluationTrace {
 /// # Example
 ///
 /// ```no_run
-/// use arrow_rule_agent::{RuleEngine, config::FuseRuleConfig};
+/// use fuse_rule::{RuleEngine, config::FuseRuleConfig};
 /// use arrow::array::Float64Array;
 /// use arrow::datatypes::{DataType, Field, Schema};
 /// use arrow::record_batch::RecordBatch;

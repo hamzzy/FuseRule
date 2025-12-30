@@ -665,7 +665,7 @@ async fn shutdown_signal(engine: SharedEngine, config_path: String) {
     // Add a small delay to ensure logs can flush
     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
     info!("Setting up shutdown signal handlers");
-    
+
     // Spawn reload handler as a background task (it runs forever)
     #[cfg(unix)]
     {
@@ -684,7 +684,7 @@ async fn shutdown_signal(engine: SharedEngine, config_path: String) {
                     warn!("SIGHUP signal stream closed unexpectedly");
                     std::future::pending::<()>().await;
                 }
-                
+
                 info!("SIGHUP received, reloading configuration...");
                 match crate::config::FuseRuleConfig::from_file(&config_path_clone) {
                     Ok(new_config) => {

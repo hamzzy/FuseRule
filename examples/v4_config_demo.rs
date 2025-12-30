@@ -1,8 +1,8 @@
 use anyhow::Result;
 use arrow::array::{Float64Array, Int32Array};
 use arrow::record_batch::RecordBatch;
-use arrow_rule_agent::config::FuseRuleConfig;
-use arrow_rule_agent::RuleEngine;
+use fuse_rule::config::FuseRuleConfig;
+use fuse_rule::RuleEngine;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;

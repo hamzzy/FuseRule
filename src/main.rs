@@ -1,9 +1,9 @@
 use anyhow::Result;
-use arrow_rule_agent::config::{FuseRuleConfig, SourceConfig};
-use arrow_rule_agent::ingestion::{KafkaIngestion, WebSocketIngestion};
-use arrow_rule_agent::server::FuseRuleServer;
-use arrow_rule_agent::RuleEngine;
 use clap::{Parser, Subcommand};
+use fuse_rule::config::{FuseRuleConfig, SourceConfig};
+use fuse_rule::ingestion::{KafkaIngestion, WebSocketIngestion};
+use fuse_rule::server::FuseRuleServer;
+use fuse_rule::RuleEngine;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
 
     match args.command {
         Commands::Validate { config, predicate } => {
-            arrow_rule_agent::cli::validate_rule(&config, predicate.as_deref()).await?;
+            fuse_rule::cli::validate_rule(&config, predicate.as_deref()).await?;
         }
         Commands::Repl { config } => {
             println!("🔥 Starting FuseRule REPL...");
@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
             let engine = RuleEngine::from_config(config_data.clone()).await?;
             let shared_engine = Arc::new(RwLock::new(engine));
             let schema = shared_engine.read().await.schema();
-            let mut repl = arrow_rule_agent::repl::Repl::new(shared_engine, schema);
+            let mut repl = fuse_rule::repl::Repl::new(shared_engine, schema);
             repl.run().await?;
         }
         Commands::Debug { config } => {
@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
             let schema = RuleEngine::from_config(config_data.clone())
                 .await
                 .map(|e| e.schema())?;
-            let mut debugger = arrow_rule_agent::debugger::RuleDebugger::new(schema);
+            let mut debugger = fuse_rule::debugger::RuleDebugger::new(schema);
             debugger.run().await?;
         }
         Commands::Run { config, port } => {

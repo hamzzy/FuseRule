@@ -8,9 +8,7 @@
 use arrow::array::Float64Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_rule_agent::{
-    evaluator::DataFusionEvaluator, rule::Rule, state::SledStateStore, RuleEngine,
-};
+use fuse_rule::{evaluator::DataFusionEvaluator, rule::Rule, state::SledStateStore, RuleEngine};
 use std::sync::Arc;
 use tempfile::TempDir;
 

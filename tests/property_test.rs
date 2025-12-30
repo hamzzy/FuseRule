@@ -1,8 +1,8 @@
 use arrow::array::{BooleanArray, Float64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_rule_agent::evaluator::{DataFusionEvaluator, RuleEvaluator};
-use arrow_rule_agent::rule::Rule;
+use fuse_rule::evaluator::{DataFusionEvaluator, RuleEvaluator};
+use fuse_rule::rule::Rule;
 use proptest::prelude::*;
 use std::sync::Arc;
 
@@ -85,7 +85,7 @@ proptest! {
         // Property: Result should be consistent with manual calculation
         let expected_true = prices.iter().any(|&p| p > threshold);
         let result = results[0].0;
-        let actual_true = matches!(result, arrow_rule_agent::state::PredicateResult::True);
+        let actual_true = matches!(result, fuse_rule::state::PredicateResult::True);
 
         prop_assert_eq!(
             expected_true, actual_true,
@@ -131,7 +131,7 @@ proptest! {
         ).unwrap();
 
         let expected_and = a && b;
-        let actual_and = matches!(and_results[0].0, arrow_rule_agent::state::PredicateResult::True);
+        let actual_and = matches!(and_results[0].0, fuse_rule::state::PredicateResult::True);
         prop_assert_eq!(expected_and, actual_and, "AND logic should be correct");
 
         // Test OR
@@ -151,7 +151,7 @@ proptest! {
         ).unwrap();
 
         let expected_or = a || b;
-        let actual_or = matches!(or_results[0].0, arrow_rule_agent::state::PredicateResult::True);
+        let actual_or = matches!(or_results[0].0, fuse_rule::state::PredicateResult::True);
         prop_assert_eq!(expected_or, actual_or, "OR logic should be correct");
     }
 
@@ -199,7 +199,7 @@ proptest! {
 
         // Property: AVG(price) > threshold should be true if avg_price > threshold
         let expected = avg_price > threshold;
-        let actual = matches!(results[0].0, arrow_rule_agent::state::PredicateResult::True);
+        let actual = matches!(results[0].0, fuse_rule::state::PredicateResult::True);
 
         // Note: Due to floating point precision, we allow small differences
         prop_assert_eq!(
