@@ -32,13 +32,13 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-arrow-rule-agent = "0.1.0"
+fuse-rule = "0.1.0"
 ```
 
 ### As a Binary
 
 ```bash
-cargo install arrow-rule-agent
+cargo install fuse-rule
 ```
 
 ## 🎯 Quickstart
