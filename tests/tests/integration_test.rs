@@ -36,6 +36,8 @@ async fn test_rule_evaluation() {
             version: 1,
             enabled: true,
             state_ttl_seconds: None,
+            description: None,
+            tags: vec![],
         }],
         agents: vec![fuse_rule_core::config::AgentConfig {
             name: "logger".to_string(),
@@ -96,6 +98,8 @@ async fn test_window_aggregation() {
             version: 1,
             enabled: true,
             state_ttl_seconds: None,
+            description: None,
+            tags: vec![],
         }],
         agents: vec![fuse_rule_core::config::AgentConfig {
             name: "logger".to_string(),

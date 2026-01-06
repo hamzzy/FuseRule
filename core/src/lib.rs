@@ -6,7 +6,7 @@
 //! ## Quick Start
 //!
 //! ```no_run
-//! use fuse_rule::{RuleEngine, config::FuseRuleConfig};
+//! use fuse_rule_core::{RuleEngine, config::FuseRuleConfig};
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! let config = FuseRuleConfig::from_file("fuse_rule_config.yaml")?;

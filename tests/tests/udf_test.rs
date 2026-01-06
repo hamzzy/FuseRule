@@ -21,7 +21,8 @@ async fn test_udf_registry() {
 
 #[tokio::test]
 async fn test_evaluator_with_udf_registry() {
-    let registry = UdfRegistry::new();
+    let mut registry = UdfRegistry::new();
+    BuiltinUdfs::register_all(&mut registry);
     let evaluator = DataFusionEvaluator::with_udf_registry(registry).unwrap();
     
     // Verify UDF registry is accessible

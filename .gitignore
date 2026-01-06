@@ -4,3 +4,4 @@ fuserule_state
 .DS_Store
 *.log
 Cargo.lock
+/test_state

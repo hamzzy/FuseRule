@@ -67,6 +67,8 @@ proptest! {
             window_seconds: None,
             version: 1,
             enabled: true,
+            description: None,
+            tags: Vec::new(),
         };
 
         let compiled = evaluator.compile(rule, &Arc::new(schema.clone())).unwrap();
@@ -124,6 +126,8 @@ proptest! {
             window_seconds: None,
             version: 1,
             enabled: true,
+            description: None,
+            tags: Vec::new(),
         };
 
         let compiled_and = evaluator.compile(and_rule, &Arc::new(schema.clone())).unwrap();
@@ -145,6 +149,8 @@ proptest! {
             window_seconds: None,
             version: 1,
             enabled: true,
+            description: None,
+            tags: Vec::new(),
         };
 
         let compiled_or = evaluator.compile(or_rule, &Arc::new(schema.clone())).unwrap();
@@ -181,6 +187,8 @@ proptest! {
             window_seconds: Some(60),
             version: 1,
             enabled: true,
+            description: None,
+            tags: Vec::new(),
         };
 
         let compiled = evaluator.compile(rule, &Arc::new(schema.clone())).unwrap();

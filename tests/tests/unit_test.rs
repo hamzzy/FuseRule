@@ -40,6 +40,8 @@ fn test_aggregate_detection() {
         window_seconds: Some(60),
         version: 1,
         enabled: true,
+        description: None,
+        tags: Vec::new(),
     };
 
     let compiled = evaluator.compile(rule_with_agg, &Arc::new(schema));
@@ -60,6 +62,8 @@ fn test_invalid_predicate() {
         window_seconds: None,
         version: 1,
         enabled: true,
+        description: None,
+        tags: Vec::new(),
     };
 
     let compiled = evaluator.compile(rule, &Arc::new(schema));
