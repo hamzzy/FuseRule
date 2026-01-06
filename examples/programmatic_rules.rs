@@ -43,6 +43,8 @@ async fn main() -> anyhow::Result<()> {
         window_seconds: None,
         version: 1,
         enabled: true,
+        description: Some("Alert when price exceeds 1000".to_string()),
+        tags: vec!["price".to_string(), "alert".to_string()],
     };
     engine.add_rule(rule).await?;
     println!("   ✅ Rule added");
@@ -68,6 +70,8 @@ async fn main() -> anyhow::Result<()> {
         window_seconds: None,
         version: 2,
         enabled: true,
+        description: Some("Alert when price exceeds 2000".to_string()),
+        tags: vec!["price".to_string(), "alert".to_string()],
     };
     engine.update_rule("high_price", updated_rule).await?;
     println!("   ✅ Rule updated");

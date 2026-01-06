@@ -52,6 +52,12 @@ pub struct RuleConfig {
     pub enabled: bool,
     #[serde(default)]
     pub state_ttl_seconds: Option<u64>, // TTL for rule state (None = never expire)
+    /// Optional description of what the rule does
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Optional tags for categorizing and filtering rules
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 fn default_enabled() -> bool {

@@ -231,6 +231,8 @@ impl RuleDebugger {
             window_seconds: None,
             version: 1,
             enabled: true,
+            description: None,
+            tags: Vec::new(),
         };
 
         println!("🔍 Stepping through rule: {}", rule_id);

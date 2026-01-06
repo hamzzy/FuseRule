@@ -28,6 +28,7 @@ pub mod agent;
 pub mod agent_queue;
 pub mod cli;
 pub mod config;
+pub mod coverage;
 pub mod debugger;
 pub mod evaluator;
 pub mod ingestion;
@@ -36,6 +37,7 @@ pub mod repl;
 pub mod rule;
 pub mod server;
 pub mod state;
+pub mod udf;
 pub mod window;
 
 use crate::agent::{Activation, Agent};
@@ -258,6 +260,8 @@ impl RuleEngine {
                     window_seconds: r_cfg.window_seconds,
                     version: r_cfg.version,
                     enabled: r_cfg.enabled,
+                    description: r_cfg.description,
+                    tags: r_cfg.tags,
                 })
                 .await?;
         }
@@ -315,6 +319,8 @@ impl RuleEngine {
                 window_seconds: r_cfg.window_seconds,
                 version: r_cfg.version,
                 enabled: r_cfg.enabled,
+                description: r_cfg.description,
+                tags: r_cfg.tags,
             };
 
             // Preserve existing window buffers if possible, otherwise create new

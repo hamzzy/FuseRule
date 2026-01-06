@@ -50,6 +50,7 @@ chrono = { version = "0.4", features = ["serde"] }
 axum = "0.7"
 tower-http = { version = "0.5", features = ["full"] }
 clap = { version = "4.0", features = ["derive"] }
+clap_complete = "4.0"
 futures = "0.3"
 handlebars = "5.1"
 rdkafka = { version = "0.36", features = ["cmake-build", "ssl-vendored"] }
@@ -59,6 +60,11 @@ rustyline = "15.0"
 [dev-dependencies]
 tokio-test = "0.4"
 proptest = "1.5"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "rule_evaluation"
+harness = false
 
 
 [[example]]

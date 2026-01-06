@@ -19,6 +19,8 @@ fn test_predicate_compilation() {
         window_seconds: None,
         version: 1,
         enabled: true,
+        description: None,
+        tags: Vec::new(),
     };
 
     let compiled = evaluator.compile(rule, &Arc::new(schema));

@@ -10,6 +10,12 @@ pub struct Rule {
     pub version: u32,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// Optional description of what the rule does
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Optional tags for categorizing and filtering rules
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 fn default_enabled() -> bool {

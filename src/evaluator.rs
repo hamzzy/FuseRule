@@ -1,5 +1,6 @@
 use crate::rule::Rule;
 use crate::state::PredicateResult;
+use crate::udf::UdfRegistry;
 use anyhow::{Context, Result};
 use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
@@ -20,6 +21,17 @@ pub trait RuleEvaluator: Send + Sync {
 
 pub struct DataFusionEvaluator {
     ctx: SessionContext,
+    udf_registry: UdfRegistry,
+}
+
+/// Error context for better diagnostics
+#[derive(Debug, Clone)]
+pub struct ErrorContext {
+    pub rule_id: Option<String>,
+    pub rule_name: Option<String>,
+    pub predicate: String,
+    pub source_location: Option<String>,
+    pub column_name: Option<String>,
 }
 
 impl Default for DataFusionEvaluator {
@@ -30,9 +42,38 @@ impl Default for DataFusionEvaluator {
 
 impl DataFusionEvaluator {
     pub fn new() -> Self {
+        let mut registry = UdfRegistry::new();
+        crate::udf::BuiltinUdfs::register_all(&mut registry);
+        
+        let ctx = SessionContext::new();
+        // UDF registration is a no-op for now, but structure is in place
+        registry.register_to_context(&ctx).expect("Failed to register built-in UDFs");
+        
         Self {
-            ctx: SessionContext::new(),
+            ctx,
+            udf_registry: registry,
         }
+    }
+
+    /// Create a new evaluator with custom UDF registry
+    pub fn with_udf_registry(udf_registry: UdfRegistry) -> Result<Self> {
+        let ctx = SessionContext::new();
+        udf_registry.register_to_context(&ctx)?;
+        
+        Ok(Self {
+            ctx,
+            udf_registry,
+        })
+    }
+
+    /// Get the UDF registry
+    pub fn udf_registry(&self) -> &UdfRegistry {
+        &self.udf_registry
+    }
+
+    /// Get mutable access to the UDF registry
+    pub fn udf_registry_mut(&mut self) -> &mut UdfRegistry {
+        &mut self.udf_registry
     }
 
     /// Check if a predicate string contains aggregate functions
@@ -68,14 +109,35 @@ pub struct CompiledRuleEdge {
 #[async_trait]
 impl RuleEvaluator for DataFusionEvaluator {
     fn compile(&self, rule: Rule, schema: &arrow::datatypes::Schema) -> Result<CompiledRuleEdge> {
-        let df_schema = datafusion::common::DFSchema::try_from(schema.clone())?;
+        let df_schema = datafusion::common::DFSchema::try_from(schema.clone())
+            .with_context(|| format!(
+                "Failed to convert schema to DataFusion schema for rule '{}' ({})",
+                rule.name, rule.id
+            ))?;
 
         // Pre-compile logical expression - this avoids re-parsing SQL on every evaluation!
         // This is a significant performance win (10x faster) compared to re-parsing on each eval
         let logical_expr = self
             .ctx
             .parse_sql_expr(&rule.predicate, &df_schema)
-            .context("Failed to parse rule predicate")?;
+            .map_err(|e| {
+                // Extract column name from error if possible
+                let column_name = extract_column_from_error(&e, &rule.predicate);
+                
+                let error_msg = format!(
+                    "Failed to parse rule predicate '{}' for rule '{}' ({}): {}. {}",
+                    rule.predicate,
+                    rule.name,
+                    rule.id,
+                    e,
+                    if let Some(col) = &column_name {
+                        format!("Column '{}' may not exist in the schema.", col)
+                    } else {
+                        "Check that all referenced columns exist in the schema and the predicate syntax is valid.".to_string()
+                    }
+                );
+                anyhow::anyhow!(error_msg)
+            })?;
 
         // Detect if expression contains aggregate functions
         // Use string-based heuristic for simplicity and reliability
@@ -223,6 +285,26 @@ impl RuleEvaluator for DataFusionEvaluator {
 
         Ok(results)
     }
+}
+
+/// Extract column name from error message (heuristic)
+fn extract_column_from_error(error: &datafusion::common::DataFusionError, predicate: &str) -> Option<String> {
+    let error_str = format!("{}", error);
+    
+    // Try to find column references in the error
+    // Common patterns: "column 'X' not found", "unknown column 'X'", etc.
+    for word in predicate.split_whitespace() {
+        let cleaned = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
+        if !cleaned.is_empty() && error_str.contains(cleaned) {
+            // Check if it's likely a column name (not a keyword)
+            let keywords = ["SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "TRUE", "FALSE", "NULL", "AVG", "COUNT", "SUM", "MIN", "MAX"];
+            if !keywords.iter().any(|&k| k.eq_ignore_ascii_case(cleaned)) {
+                return Some(cleaned.to_string());
+            }
+        }
+    }
+    
+    None
 }
 
 pub fn infer_json_schema(value: &serde_json::Value) -> arrow::datatypes::Schema {

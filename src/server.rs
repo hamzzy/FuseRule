@@ -246,6 +246,8 @@ async fn handle_validate_rule(
         window_seconds: req.window_seconds,
         version: req.version.unwrap_or(1),
         enabled: req.enabled.unwrap_or(true),
+        description: None,
+        tags: Vec::new(),
     };
 
     let engine_lock = engine.read().await;
@@ -296,6 +298,8 @@ async fn handle_create_rule(
         window_seconds: req.window_seconds,
         version: req.version.unwrap_or(1),
         enabled: req.enabled.unwrap_or(true),
+        description: None,
+        tags: Vec::new(),
     };
 
     // Validate rule by attempting to compile it
@@ -376,6 +380,8 @@ async fn handle_update_rule(
         window_seconds: req.window_seconds,
         version: req.version.unwrap_or(1),
         enabled: req.enabled.unwrap_or(true),
+        description: None,
+        tags: Vec::new(),
     };
 
     // Validate rule by attempting to compile it
@@ -483,6 +489,8 @@ async fn handle_patch_rule(
             window_seconds: updated_rule.window_seconds,
             version: updated_rule.version,
             enabled: updated_rule.enabled,
+            description: None,
+            tags: Vec::new(),
         };
         if evaluator.compile(test_rule, &schema).is_err() {
             return (

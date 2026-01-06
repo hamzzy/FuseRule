@@ -1,5 +1,6 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete;
 use fuse_rule::config::{FuseRuleConfig, SourceConfig};
 use fuse_rule::ingestion::{KafkaIngestion, WebSocketIngestion};
 use fuse_rule::server::FuseRuleServer;
@@ -38,6 +39,18 @@ enum Commands {
         #[arg(short, long)]
         predicate: Option<String>,
     },
+    /// Lint rules in configuration file
+    Lint {
+        /// Path to the configuration file
+        #[arg(short, long, default_value = "fuse_rule_config.yaml")]
+        config: String,
+    },
+    /// Test rules with validation mode
+    Test {
+        /// Path to the configuration file
+        #[arg(short, long, default_value = "fuse_rule_config.yaml")]
+        config: String,
+    },
     /// Start interactive REPL mode
     Repl {
         /// Path to the configuration file
@@ -49,6 +62,12 @@ enum Commands {
         /// Path to the configuration file
         #[arg(short, long, default_value = "fuse_rule_config.yaml")]
         config: String,
+    },
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
     },
 }
 
@@ -62,6 +81,12 @@ async fn main() -> Result<()> {
     match args.command {
         Commands::Validate { config, predicate } => {
             fuse_rule::cli::validate_rule(&config, predicate.as_deref()).await?;
+        }
+        Commands::Lint { config } => {
+            fuse_rule::cli::lint_rules(&config).await?;
+        }
+        Commands::Test { config } => {
+            fuse_rule::cli::test_rules(&config).await?;
         }
         Commands::Repl { config } => {
             println!("🔥 Starting FuseRule REPL...");
@@ -80,6 +105,14 @@ async fn main() -> Result<()> {
                 .map(|e| e.schema())?;
             let mut debugger = fuse_rule::debugger::RuleDebugger::new(schema);
             debugger.run().await?;
+        }
+        Commands::Completions { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "fuserule",
+                &mut std::io::stdout(),
+            );
         }
         Commands::Run { config, port } => {
             println!("🔥 Initializing FuseRule Daemon...");
