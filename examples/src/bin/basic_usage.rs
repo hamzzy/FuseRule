@@ -8,7 +8,7 @@
 use arrow::array::{Float64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use fuse_rule::{config::FuseRuleConfig, RuleEngine};
+use fuse_rule_core::{config::FuseRuleConfig, RuleEngine};
 use std::sync::Arc;
 
 #[tokio::main]

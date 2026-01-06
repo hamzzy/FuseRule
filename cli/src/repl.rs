@@ -1,4 +1,4 @@
-use crate::RuleEngine;
+use fuse_rule_core::RuleEngine;
 use anyhow::{Context, Result};
 use arrow::datatypes::Schema;
 use arrow_json::ReaderBuilder;
@@ -144,7 +144,7 @@ impl Repl {
                                     "Deactivated" => "🔻 DEACTIVATED",
                                     _ => "",
                                 },
-                                if matches!(trace.result, crate::state::PredicateResult::True) {
+                                if matches!(trace.result, fuse_rule_core::state::PredicateResult::True) {
                                     "TRUE"
                                 } else {
                                     "FALSE"
@@ -183,7 +183,7 @@ impl Repl {
 
                 println!(
                     "  {} {} [{}] - Window: {} rows",
-                    if matches!(last_result, crate::state::PredicateResult::True) {
+                    if matches!(last_result, fuse_rule_core::state::PredicateResult::True) {
                         "🟢"
                     } else {
                         "⚪"

@@ -4,9 +4,9 @@ use arrow::array::{Float64Array, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use fuse_rule::evaluator::{DataFusionEvaluator, RuleEvaluator};
-use fuse_rule::rule::Rule;
-use fuse_rule::RuleEngine;
+use fuse_rule_core::evaluator::{DataFusionEvaluator, RuleEvaluator};
+use fuse_rule_core::rule::Rule;
+use fuse_rule_core::RuleEngine;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -120,7 +120,7 @@ fn benchmark_multiple_rules(c: &mut Criterion) {
 
     let mut engine = RuleEngine::new(
         Box::new(DataFusionEvaluator::new()),
-        Box::new(fuse_rule::state::SledStateStore::new(&state_path).unwrap()),
+        Box::new(fuse_rule_core::state::SledStateStore::new(&state_path).unwrap()),
         Arc::new(schema),
         1000,
         10,

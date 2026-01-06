@@ -24,18 +24,14 @@
 //! - **Time Windows**: Sliding windows for aggregate functions
 //! - **Pluggable Architecture**: Custom state stores, evaluators, and agents
 
+
 pub mod agent;
 pub mod agent_queue;
-pub mod cli;
 pub mod config;
 pub mod coverage;
-pub mod debugger;
 pub mod evaluator;
-pub mod ingestion;
 pub mod metrics;
-pub mod repl;
 pub mod rule;
-pub mod server;
 pub mod state;
 pub mod udf;
 pub mod window;
@@ -62,7 +58,7 @@ use tracing::{debug, error, info, warn};
 /// # Example
 ///
 /// ```no_run
-/// # use fuse_rule::RuleEngine;
+/// # use fuse_rule_core::RuleEngine;
 /// # use arrow::array::Float64Array;
 /// # use arrow::datatypes::{DataType, Field, Schema};
 /// # use arrow::record_batch::RecordBatch;
@@ -109,7 +105,7 @@ pub struct EvaluationTrace {
 /// # Example
 ///
 /// ```no_run
-/// use fuse_rule::{RuleEngine, config::FuseRuleConfig};
+/// use fuse_rule_core::{RuleEngine, config::FuseRuleConfig};
 /// use arrow::array::Float64Array;
 /// use arrow::datatypes::{DataType, Field, Schema};
 /// use arrow::record_batch::RecordBatch;
@@ -133,14 +129,14 @@ pub struct EvaluationTrace {
 /// # }
 /// ```
 pub struct RuleEngine {
-    evaluator: Box<dyn RuleEvaluator>,
-    state: Box<dyn StateStore>,
-    rules: Vec<CompiledRuleEdge>,
-    window_buffers: HashMap<String, WindowBuffer>,
-    agents: HashMap<String, Arc<dyn Agent>>,
-    schema: Arc<arrow::datatypes::Schema>,
-    agent_queue: Option<AgentQueue>,
-    circuit_breakers: HashMap<String, Arc<CircuitBreaker>>,
+    pub evaluator: Box<dyn RuleEvaluator>,
+    pub state: Box<dyn StateStore>,
+    pub rules: Vec<CompiledRuleEdge>,
+    pub window_buffers: HashMap<String, WindowBuffer>,
+    pub agents: HashMap<String, Arc<dyn Agent>>,
+    pub schema: Arc<arrow::datatypes::Schema>,
+    pub agent_queue: Option<AgentQueue>,
+    pub circuit_breakers: HashMap<String, Arc<CircuitBreaker>>,
 }
 
 impl RuleEngine {
@@ -228,26 +224,8 @@ impl RuleEngine {
             agent_concurrency,
         );
 
-        // 3. Add Agents
-        for agent_cfg in config.agents {
-            match agent_cfg.r#type.as_str() {
-                "logger" => {
-                    engine.add_agent(agent_cfg.name, Arc::new(crate::agent::LoggerAgent));
-                }
-                "webhook" => {
-                    if let Some(url) = agent_cfg.url {
-                        engine.add_agent(
-                            agent_cfg.name,
-                            Arc::new(crate::agent::WebhookAgent::new(
-                                url,
-                                agent_cfg.template.clone(),
-                            )),
-                        );
-                    }
-                }
-                _ => println!("Warning: Unknown agent type '{}'", agent_cfg.r#type),
-            }
-        }
+        // 3. Add Agents - DECOUPLED
+        // Agents must be added by the caller (CLI) as Core does not know about specific agents.
 
         // 4. Add Rules
         for r_cfg in config.rules {
@@ -272,39 +250,8 @@ impl RuleEngine {
     pub async fn reload_from_config(&mut self, config: FuseRuleConfig) -> Result<()> {
         info!("🔄 Reloading engine configuration...");
 
-        // 1. Update Agents
-        let mut new_agents = HashMap::new();
-        let mut new_circuit_breakers = HashMap::new();
-        for agent_cfg in config.agents {
-            match agent_cfg.r#type.as_str() {
-                "logger" => {
-                    new_agents.insert(
-                        agent_cfg.name.clone(),
-                        Arc::new(crate::agent::LoggerAgent) as Arc<dyn Agent>,
-                    );
-                }
-                "webhook" => {
-                    if let Some(url) = agent_cfg.url {
-                        let agent_name = agent_cfg.name.clone();
-                        new_agents.insert(
-                            agent_name.clone(),
-                            Arc::new(crate::agent::WebhookAgent::new(
-                                url,
-                                agent_cfg.template.clone(),
-                            )) as Arc<dyn Agent>,
-                        );
-                        // Create circuit breaker for webhook agents
-                        new_circuit_breakers.insert(
-                            agent_name,
-                            Arc::new(CircuitBreaker::new(5, std::time::Duration::from_secs(30))),
-                        );
-                    }
-                }
-                _ => warn!("Unknown agent type '{}' during reload", agent_cfg.r#type),
-            }
-        }
-        self.agents = new_agents;
-        self.circuit_breakers = new_circuit_breakers;
+        // 1. Update Agents - DECOUPLED
+        // Caller update agents.
 
         // 2. Update Rules
         let mut new_rules = Vec::new();

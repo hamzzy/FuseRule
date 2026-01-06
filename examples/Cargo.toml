@@ -1,0 +1,12 @@
+[package]
+name = "fuse-rule-examples"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fuse-rule-core = { path = "../core" }
+fuse-rule-agents = { path = "../agents" }
+arrow = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true }

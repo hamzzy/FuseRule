@@ -1,5 +1,5 @@
-use crate::evaluator::RuleEvaluator;
-use crate::RuleEngine;
+use fuse_rule_core::evaluator::RuleEvaluator;
+use fuse_rule_core::RuleEngine;
 use arrow_json::ReaderBuilder;
 use axum::{
     extract::{Json, Request, State},
@@ -236,7 +236,7 @@ async fn handle_validate_rule(
     State(engine): State<SharedEngine>,
     Json(req): Json<CreateRuleRequest>,
 ) -> impl IntoResponse {
-    use crate::rule::Rule;
+    use fuse_rule_core::rule::Rule;
 
     let rule = Rule {
         id: req.id.clone(),
@@ -252,7 +252,7 @@ async fn handle_validate_rule(
 
     let engine_lock = engine.read().await;
     let schema = engine_lock.schema();
-    let evaluator = crate::evaluator::DataFusionEvaluator::new();
+    let evaluator = fuse_rule_core::evaluator::DataFusionEvaluator::new();
 
     let mut errors = Vec::new();
     let mut compiled = false;
@@ -288,7 +288,7 @@ async fn handle_create_rule(
     State(engine): State<SharedEngine>,
     Json(req): Json<CreateRuleRequest>,
 ) -> impl IntoResponse {
-    use crate::rule::Rule;
+    use fuse_rule_core::rule::Rule;
 
     let rule = Rule {
         id: req.id.clone(),
@@ -305,7 +305,7 @@ async fn handle_create_rule(
     // Validate rule by attempting to compile it
     let engine_lock = engine.read().await;
     let schema = engine_lock.schema();
-    let evaluator = crate::evaluator::DataFusionEvaluator::new();
+    let evaluator = fuse_rule_core::evaluator::DataFusionEvaluator::new();
 
     match evaluator.compile(rule.clone(), &schema) {
         Ok(_) => {
@@ -358,7 +358,7 @@ async fn handle_update_rule(
     axum::extract::Path(rule_id): axum::extract::Path<String>,
     Json(req): Json<CreateRuleRequest>,
 ) -> impl IntoResponse {
-    use crate::rule::Rule;
+    use fuse_rule_core::rule::Rule;
 
     // Ensure the rule_id in path matches the id in body
     if req.id != rule_id {
@@ -387,7 +387,7 @@ async fn handle_update_rule(
     // Validate rule by attempting to compile it
     let engine_lock = engine.read().await;
     let schema = engine_lock.schema();
-    let evaluator = crate::evaluator::DataFusionEvaluator::new();
+    let evaluator = fuse_rule_core::evaluator::DataFusionEvaluator::new();
 
     match evaluator.compile(rule.clone(), &schema) {
         Ok(_) => {
@@ -480,8 +480,8 @@ async fn handle_patch_rule(
     if let Some(predicate) = req.predicate {
         // Validate predicate compiles
         let schema = engine_lock.schema();
-        let evaluator = crate::evaluator::DataFusionEvaluator::new();
-        let test_rule = crate::rule::Rule {
+        let evaluator = fuse_rule_core::evaluator::DataFusionEvaluator::new();
+        let test_rule = fuse_rule_core::rule::Rule {
             id: updated_rule.id.clone(),
             name: updated_rule.name.clone(),
             predicate: predicate.clone(),
@@ -568,7 +568,7 @@ async fn handle_state(State(engine): State<SharedEngine>) -> impl IntoResponse {
             .state
             .get_last_result(&rule.rule.id)
             .await
-            .unwrap_or(crate::state::PredicateResult::False);
+            .unwrap_or(fuse_rule_core::state::PredicateResult::False);
 
         let window_size = engine_lock
             .window_buffers
@@ -585,8 +585,8 @@ async fn handle_state(State(engine): State<SharedEngine>) -> impl IntoResponse {
             "rule_id": rule.rule.id,
             "rule_name": rule.rule.name,
             "current_state": match last_result {
-                crate::state::PredicateResult::True => "active",
-                crate::state::PredicateResult::False => "inactive",
+                fuse_rule_core::state::PredicateResult::True => "active",
+                fuse_rule_core::state::PredicateResult::False => "inactive",
             },
             "window_size": window_size,
             "enabled": rule.rule.enabled,
@@ -622,7 +622,7 @@ async fn handle_rule_state(
         .state
         .get_last_result(&rule_id)
         .await
-        .unwrap_or(crate::state::PredicateResult::False);
+        .unwrap_or(fuse_rule_core::state::PredicateResult::False);
 
     let last_transition = engine_lock
         .state
@@ -643,15 +643,15 @@ async fn handle_rule_state(
         .unwrap_or(0);
 
     // Get activation count from metrics
-    let metrics = crate::metrics::METRICS.snapshot();
+    let metrics = fuse_rule_core::metrics::METRICS.snapshot();
     let activation_count = metrics.rule_activations.get(&rule_id).copied().unwrap_or(0);
 
     let mut response = serde_json::json!({
         "rule_id": rule_id,
         "rule_name": rule.rule.name,
         "current_state": match last_result {
-            crate::state::PredicateResult::True => "active",
-            crate::state::PredicateResult::False => "inactive",
+            fuse_rule_core::state::PredicateResult::True => "active",
+            fuse_rule_core::state::PredicateResult::False => "inactive",
         },
         "activation_count": activation_count,
         "window_size": window_size,
@@ -694,7 +694,7 @@ async fn shutdown_signal(engine: SharedEngine, config_path: String) {
                 }
 
                 info!("SIGHUP received, reloading configuration...");
-                match crate::config::FuseRuleConfig::from_file(&config_path_clone) {
+                match fuse_rule_core::config::FuseRuleConfig::from_file(&config_path_clone) {
                     Ok(new_config) => {
                         let mut engine_lock = engine_clone.write().await;
                         if let Err(e) = engine_lock.reload_from_config(new_config).await {
@@ -800,7 +800,7 @@ async fn handle_rules(State(engine): State<SharedEngine>) -> impl IntoResponse {
 }
 
 async fn handle_metrics() -> String {
-    crate::metrics::METRICS.to_prometheus()
+    fuse_rule_core::metrics::METRICS.to_prometheus()
 }
 
 async fn handle_ingest_with_rate_limit(

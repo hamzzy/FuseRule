@@ -3,9 +3,9 @@
 use arrow::array::{Float64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use fuse_rule::evaluator::{DataFusionEvaluator, RuleEvaluator};
-use fuse_rule::rule::Rule;
-use fuse_rule::udf::{BuiltinUdfs, UdfRegistry};
+use fuse_rule_core::evaluator::{DataFusionEvaluator, RuleEvaluator};
+use fuse_rule_core::rule::Rule;
+use fuse_rule_core::udf::{BuiltinUdfs, UdfRegistry};
 use std::sync::Arc;
 
 #[tokio::test]
@@ -107,6 +107,6 @@ async fn test_rule_evaluation_with_functions() {
     // ABS(-30) = 30 > 50 = false
     // ABS(60) = 60 > 50 = true
     // So at least one row matches, result should be True
-    assert!(matches!(results[0].0, fuse_rule::state::PredicateResult::True));
+    assert!(matches!(results[0].0, fuse_rule_core::state::PredicateResult::True));
 }
 

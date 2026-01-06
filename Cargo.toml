@@ -1,76 +1,47 @@
-[package]
-name = "fuse-rule"
-version = "0.1.0"
-edition = "2021"
-authors = ["Ibrahim Hamzat <hamat.ibrahim3@gmail.com>"]
-description = "High-performance, Arrow-native Complex Event Processing (CEP) engine with SQL-powered rules"
-license = "Apache-2.0"
-repository = "https://github.com/hamzzy/arrow-rule-agent"
-homepage = "https://github.com/hamzzy/arrow-rule-agent"
-documentation = "https://docs.rs/fuse-rule"
-keywords = ["rules", "cep", "arrow", "datafusion", "event-processing"]
-categories = ["algorithms", "data-structures", "web-programming"]
-readme = "README.md"
-exclude = [
-    "target/",
-    "fuserule_state/",
-    ".git/",
-    ".fuserule_history",
-    ".fuserule_debug_history",
+[workspace]
+resolver = "2"
+members = [
+    "core",
+    "agents",
+    "connectors",
+    "cli"
 ]
 
-[dependencies]
-# Arrow and DataFusion
+[workspace.dependencies]
 arrow = "53.0"
-datafusion = "42.0"
 arrow-json = "53.0"
-
-# Serialization
+datafusion = "42.0"
+tokio = { version = "1.42", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 serde_yaml = "0.9"
-
-# Async
-tokio = { version = "1.0", features = ["full"] }
-
-# Utilities
-uuid = { version = "1.0", features = ["v4"] }
-anyhow = "1.0"
-log = "0.4"
-lazy_static = "1.4"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-env_logger = "0.11"
-sled = "0.34"
-serde_json = "1.0"
-tempfile = "3.0"
-reqwest = { version = "0.12", features = ["json"] }
-config = "0.14"
+anyhow = "1.0"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
-axum = "0.7"
-tower-http = { version = "0.5", features = ["full"] }
-clap = { version = "4.0", features = ["derive"] }
-clap_complete = "4.0"
-futures = "0.3"
-handlebars = "5.1"
+thiserror = "1.0"
+log = "0.4"
+base64 = "0.22"
+uuid = { version = "1.10", features = ["v4", "serde"] }
+config = "0.14"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+handlebars = "6.2" # Updated
 rdkafka = { version = "0.36", features = ["cmake-build", "ssl-vendored"] }
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["full"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+clap_complete = "4.5"
+rustyline = "14.0" 
+futures = "0.3"
+sled = "0.34"
+env_logger = "0.11"
+tempfile = "3.10"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
-rustyline = "15.0"
+lazy_static = "1.5"
 
-[dev-dependencies]
-tokio-test = "0.4"
-proptest = "1.5"
-criterion = { version = "0.5", features = ["html_reports"] }
-
-[[bench]]
-name = "rule_evaluation"
-harness = false
-
-
-[[example]]
-name = "basic_usage"
-path = "examples/basic_usage.rs"
-
-[[example]]
-name = "programmatic_rules"
-path = "examples/programmatic_rules.rs"
+[profile.release]
+lto = true
+opt-level = 3
+codegen-units = 1

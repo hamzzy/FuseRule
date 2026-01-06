@@ -1,7 +1,7 @@
-use crate::config::FuseRuleConfig;
-use crate::evaluator::{DataFusionEvaluator, RuleEvaluator};
-use crate::rule::Rule;
-use crate::RuleEngine;
+use fuse_rule_core::config::FuseRuleConfig;
+use fuse_rule_core::evaluator::{DataFusionEvaluator, RuleEvaluator};
+use fuse_rule_core::rule::Rule;
+use fuse_rule_core::RuleEngine;
 use anyhow::Result;
 use clap::Parser;
 use std::collections::HashSet;

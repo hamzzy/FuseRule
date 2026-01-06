@@ -1,6 +1,6 @@
 use arrow::datatypes::{DataType, Field, Schema};
-use fuse_rule::evaluator::{DataFusionEvaluator, RuleEvaluator};
-use fuse_rule::rule::Rule;
+use fuse_rule_core::evaluator::{DataFusionEvaluator, RuleEvaluator};
+use fuse_rule_core::rule::Rule;
 use std::sync::Arc;
 
 #[test]

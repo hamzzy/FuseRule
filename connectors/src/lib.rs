@@ -1,4 +1,4 @@
-use crate::RuleEngine;
+use fuse_rule_core::RuleEngine;
 use anyhow::{Context, Result};
 use arrow_json::ReaderBuilder;
 use std::io::Cursor;

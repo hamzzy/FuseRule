@@ -1,10 +1,16 @@
+mod cli;
+mod debugger;
+mod repl;
+mod server;
+
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete;
-use fuse_rule::config::{FuseRuleConfig, SourceConfig};
-use fuse_rule::ingestion::{KafkaIngestion, WebSocketIngestion};
-use fuse_rule::server::FuseRuleServer;
-use fuse_rule::RuleEngine;
+use fuse_rule_core::config::{FuseRuleConfig, SourceConfig};
+use fuse_rule_connectors::{KafkaIngestion, WebSocketIngestion};
+use crate::server::FuseRuleServer;
+use fuse_rule_core::RuleEngine;
+use fuse_rule_agents::{LoggerAgent, WebhookAgent};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
@@ -71,6 +77,31 @@ enum Commands {
     },
 }
 
+async fn build_engine(config: &FuseRuleConfig) -> Result<RuleEngine> {
+    let mut engine = RuleEngine::from_config(config.clone()).await?;
+
+    for agent_cfg in &config.agents {
+        match agent_cfg.r#type.as_str() {
+             "logger" => {
+                 engine.add_agent(agent_cfg.name.clone(), Arc::new(LoggerAgent));
+             }
+             "webhook" => {
+                 if let Some(url) = &agent_cfg.url {
+                     engine.add_agent(
+                         agent_cfg.name.clone(),
+                         Arc::new(WebhookAgent::new(
+                                url.clone(),
+                                agent_cfg.template.clone(),
+                         )),
+                     );
+                 }
+             }
+             _ => println!("Warning: Unknown agent type '{}'", agent_cfg.r#type),
+        }
+    }
+    Ok(engine)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // 0. Initialize Tracing
@@ -80,30 +111,29 @@ async fn main() -> Result<()> {
 
     match args.command {
         Commands::Validate { config, predicate } => {
-            fuse_rule::cli::validate_rule(&config, predicate.as_deref()).await?;
+            crate::cli::validate_rule(&config, predicate.as_deref()).await?;
         }
         Commands::Lint { config } => {
-            fuse_rule::cli::lint_rules(&config).await?;
+            crate::cli::lint_rules(&config).await?;
         }
         Commands::Test { config } => {
-            fuse_rule::cli::test_rules(&config).await?;
+            crate::cli::test_rules(&config).await?;
         }
         Commands::Repl { config } => {
             println!("🔥 Starting FuseRule REPL...");
             let config_data = FuseRuleConfig::from_file(&config)?;
-            let engine = RuleEngine::from_config(config_data.clone()).await?;
+            let engine = build_engine(&config_data).await?;
             let shared_engine = Arc::new(RwLock::new(engine));
             let schema = shared_engine.read().await.schema();
-            let mut repl = fuse_rule::repl::Repl::new(shared_engine, schema);
+            let mut repl = crate::repl::Repl::new(shared_engine, schema);
             repl.run().await?;
         }
         Commands::Debug { config } => {
             println!("🐛 Starting FuseRule Debugger...");
             let config_data = FuseRuleConfig::from_file(&config)?;
-            let schema = RuleEngine::from_config(config_data.clone())
-                .await
-                .map(|e| e.schema())?;
-            let mut debugger = fuse_rule::debugger::RuleDebugger::new(schema);
+            let engine = build_engine(&config_data).await?;
+            let schema = engine.schema();
+            let mut debugger = crate::debugger::RuleDebugger::new(schema);
             debugger.run().await?;
         }
         Commands::Completions { shell } => {
@@ -121,7 +151,7 @@ async fn main() -> Result<()> {
             let config_data = FuseRuleConfig::from_file(&config)?;
 
             // 2. Build Engine
-            let engine = RuleEngine::from_config(config_data.clone()).await?;
+            let engine = build_engine(&config_data).await?;
 
             // 3. (Optional) In a real product, we'd add the rules from the config here too
             // For this version, let's assume the user wants the server to start.

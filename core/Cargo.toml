@@ -1,0 +1,24 @@
+[package]
+name = "fuse-rule-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arrow = { workspace = true }
+datafusion = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+sled = { workspace = true }
+uuid = { workspace = true }
+config = { workspace = true }
+log = { workspace = true }
+lazy_static = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
