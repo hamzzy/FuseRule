@@ -19,6 +19,9 @@ uuid = { workspace = true }
 config = { workspace = true }
 log = { workspace = true }
 lazy_static = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+clickhouse = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
