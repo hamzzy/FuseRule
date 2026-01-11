@@ -1800,6 +1800,8 @@ dependencies = [
  "log",
  "opentelemetry",
  "opentelemetry_sdk",
+ "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",

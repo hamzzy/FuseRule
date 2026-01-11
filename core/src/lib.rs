@@ -33,6 +33,7 @@ pub mod evaluator;
 pub mod metrics;
 pub mod observability;
 pub mod rule;
+pub mod rule_graph;
 pub mod state;
 pub mod udf;
 pub mod window;
