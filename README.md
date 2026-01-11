@@ -32,7 +32,8 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-fuse-rule = "0.1.0"
+fuse-rule-core = { path = "core" }
+fuse-rule-agents = { path = "agents" } # Optional: for built-in agents
 ```
 
 ### As a Binary

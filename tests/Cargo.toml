@@ -1,0 +1,19 @@
+[package]
+name = "fuse-rule-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fuse-rule-core = { path = "../core" }
+fuse-rule-agents = { path = "../agents" }
+arrow = { workspace = true }
+datafusion = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tokio-test = { workspace = true }
+proptest = "1.5" # Explicit since not in workspace vars or verify? I'll use explicit
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "rule_evaluation"
+harness = false
