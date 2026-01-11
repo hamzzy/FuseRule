@@ -31,6 +31,7 @@ pub mod config;
 pub mod coverage;
 pub mod evaluator;
 pub mod metrics;
+pub mod observability;
 pub mod rule;
 pub mod state;
 pub mod udf;
@@ -137,6 +138,8 @@ pub struct RuleEngine {
     pub schema: Arc<arrow::datatypes::Schema>,
     pub agent_queue: Option<AgentQueue>,
     pub circuit_breakers: HashMap<String, Arc<CircuitBreaker>>,
+    pub audit_log: Option<Arc<observability::AuditLog>>,
+    pub trace_store: Option<Arc<observability::TraceStore>>,
 }
 
 impl RuleEngine {
@@ -165,6 +168,8 @@ impl RuleEngine {
             schema,
             agent_queue: Some(agent_queue),
             circuit_breakers: HashMap::new(),
+            audit_log: None,
+            trace_store: None,
         }
     }
 
@@ -224,10 +229,60 @@ impl RuleEngine {
             agent_concurrency,
         );
 
-        // 3. Add Agents - DECOUPLED
+        // 3. Initialize Observability Components
+        if config.observability.audit_log_enabled {
+            let db = sled::open(&config.engine.persistence_path)?;
+            let audit_log = Arc::new(observability::AuditLog::new(Arc::new(db))?);
+            engine.audit_log = Some(audit_log.clone());
+
+            // Log engine start event
+            let event = observability::AuditEvent::new(
+                observability::AuditEventType::EngineStarted,
+                "FuseRule engine started",
+            );
+            let _ = audit_log.log(event).await;
+        }
+
+        if config.observability.tracing.enabled {
+            // Initialize OpenTelemetry tracing
+            let tracing_config = observability::tracing::TracingConfig {
+                enabled: config.observability.tracing.enabled,
+                otlp_endpoint: config.observability.tracing.otlp_endpoint,
+                service_name: config.observability.tracing.service_name,
+                sampling_ratio: config.observability.tracing.sampling_ratio,
+                resource_attributes: None,
+            };
+
+            if let Ok(Some(_provider)) = observability::init_tracing(tracing_config) {
+                info!("Distributed tracing initialized");
+            }
+        }
+
+        if config.observability.trace_store.enabled {
+            let trace_store_config = observability::trace_store::TraceStoreConfig {
+                enabled: config.observability.trace_store.enabled,
+                clickhouse_url: config.observability.trace_store.clickhouse_url,
+                database: config.observability.trace_store.database,
+                table: config.observability.trace_store.table,
+                batch_size: 1000,
+                flush_interval_seconds: 10,
+            };
+
+            match observability::TraceStore::new(trace_store_config).await {
+                Ok(trace_store) => {
+                    engine.trace_store = Some(Arc::new(trace_store));
+                    info!("Trace store initialized");
+                }
+                Err(e) => {
+                    warn!("Failed to initialize trace store: {}", e);
+                }
+            }
+        }
+
+        // 4. Add Agents - DECOUPLED
         // Agents must be added by the caller (CLI) as Core does not know about specific agents.
 
-        // 4. Add Rules
+        // 5. Add Rules
         for r_cfg in config.rules {
             engine
                 .add_rule(Rule {
@@ -302,13 +357,43 @@ impl RuleEngine {
         self.agents.insert(name, agent);
     }
 
+    /// Set audit log for tracking rule lifecycle events
+    pub fn with_audit_log(mut self, audit_log: Arc<observability::AuditLog>) -> Self {
+        self.audit_log = Some(audit_log);
+        self
+    }
+
+    /// Set trace store for persisting evaluation traces
+    pub fn with_trace_store(mut self, trace_store: Arc<observability::TraceStore>) -> Self {
+        self.trace_store = Some(trace_store);
+        self
+    }
+
     pub async fn add_rule(&mut self, rule: Rule) -> Result<()> {
         if let Some(secs) = rule.window_seconds {
             self.window_buffers
                 .insert(rule.id.clone(), WindowBuffer::new(secs));
         }
-        let compiled = self.evaluator.compile(rule, &self.schema)?;
+        let compiled = self.evaluator.compile(rule.clone(), &self.schema)?;
         self.rules.push(compiled);
+
+        // Emit audit event
+        if let Some(audit_log) = &self.audit_log {
+            let event = observability::AuditEvent::new(
+                observability::AuditEventType::RuleCreated,
+                format!("Rule '{}' created", rule.name),
+            )
+            .with_rule(&rule.id, &rule.name)
+            .with_metadata(serde_json::json!({
+                "predicate": rule.predicate,
+                "action": rule.action,
+                "version": rule.version,
+                "enabled": rule.enabled,
+            }));
+
+            let _ = audit_log.log(event).await;
+        }
+
         Ok(())
     }
 
@@ -320,10 +405,13 @@ impl RuleEngine {
         }
 
         let rule_idx = rule_idx.unwrap();
-        let old_rule = &self.rules[rule_idx].rule;
+
+        // Get old rule info before modifying
+        let old_version = self.rules[rule_idx].rule.version;
+        let old_window_seconds = self.rules[rule_idx].rule.window_seconds;
 
         // Preserve window buffer if window_seconds unchanged
-        let preserve_buffer = old_rule.window_seconds == new_rule.window_seconds;
+        let preserve_buffer = old_window_seconds == new_rule.window_seconds;
         let existing_buffer = if preserve_buffer {
             self.window_buffers.remove(rule_id)
         } else {
@@ -331,7 +419,7 @@ impl RuleEngine {
         };
 
         // Compile new rule
-        let compiled = self.evaluator.compile(new_rule, &self.schema)?;
+        let compiled = self.evaluator.compile(new_rule.clone(), &self.schema)?;
 
         // Replace rule
         self.rules[rule_idx] = compiled;
@@ -344,13 +432,52 @@ impl RuleEngine {
                 .insert(rule_id.to_string(), WindowBuffer::new(secs));
         }
 
+        // Emit audit event
+        if let Some(audit_log) = &self.audit_log {
+            let event = observability::AuditEvent::new(
+                observability::AuditEventType::RuleUpdated,
+                format!("Rule '{}' updated", new_rule.name),
+            )
+            .with_rule(&new_rule.id, &new_rule.name)
+            .with_metadata(serde_json::json!({
+                "old_version": old_version,
+                "new_version": new_rule.version,
+                "predicate": new_rule.predicate,
+            }));
+
+            let _ = audit_log.log(event).await;
+        }
+
         Ok(())
     }
 
     pub async fn toggle_rule(&mut self, rule_id: &str, enabled: bool) -> Result<()> {
         let rule_idx = self.rules.iter().position(|r| r.rule.id == rule_id);
         if let Some(idx) = rule_idx {
+            // Get rule info before modifying
+            let rule_id_str = self.rules[idx].rule.id.clone();
+            let rule_name_str = self.rules[idx].rule.name.clone();
+
+            // Update enabled state
             self.rules[idx].rule.enabled = enabled;
+
+            // Emit audit event
+            if let Some(audit_log) = &self.audit_log {
+                let event_type = if enabled {
+                    observability::AuditEventType::RuleEnabled
+                } else {
+                    observability::AuditEventType::RuleDisabled
+                };
+
+                let event = observability::AuditEvent::new(
+                    event_type,
+                    format!("Rule '{}' {}", rule_name_str, if enabled { "enabled" } else { "disabled" }),
+                )
+                .with_rule(&rule_id_str, &rule_name_str);
+
+                let _ = audit_log.log(event).await;
+            }
+
             Ok(())
         } else {
             anyhow::bail!("Rule not found: {}", rule_id)
@@ -358,7 +485,21 @@ impl RuleEngine {
     }
 
     pub async fn process_batch(&mut self, batch: &RecordBatch) -> Result<Vec<EvaluationTrace>> {
+        use opentelemetry::trace::{Span, SpanKind, Tracer};
+
         let _start = Instant::now();
+
+        // Create tracing span for batch ingestion
+        let tracer = opentelemetry::global::tracer("fuse-rule-engine");
+        let mut batch_span = tracer
+            .span_builder("process_batch")
+            .with_kind(SpanKind::Server)
+            .start(&tracer);
+
+        batch_span.set_attribute(opentelemetry::KeyValue::new(
+            "batch.size",
+            batch.num_rows() as i64,
+        ));
 
         let mut windowed_data = Vec::with_capacity(self.rules.len());
         for rule in &self.rules {
@@ -554,6 +695,42 @@ impl RuleEngine {
                 });
             }
         }
+
+        // Persist traces to trace store if enabled
+        if let Some(trace_store) = &self.trace_store {
+            if let Err(e) = trace_store.store_traces(&traces).await {
+                warn!("Failed to persist traces to store: {}", e);
+            }
+        }
+
+        // Emit audit events for activations
+        if let Some(audit_log) = &self.audit_log {
+            for trace in &traces {
+                if trace.transition == "Activated" {
+                    let event = observability::AuditEvent::new(
+                        observability::AuditEventType::RuleActivated,
+                        format!("Rule '{}' activated", trace.rule_name),
+                    )
+                    .with_rule(&trace.rule_id, &trace.rule_name);
+
+                    let _ = audit_log.log(event).await;
+                } else if trace.transition == "Deactivated" {
+                    let event = observability::AuditEvent::new(
+                        observability::AuditEventType::RuleDeactivated,
+                        format!("Rule '{}' deactivated", trace.rule_name),
+                    )
+                    .with_rule(&trace.rule_id, &trace.rule_name);
+
+                    let _ = audit_log.log(event).await;
+                }
+            }
+        }
+
+        batch_span.set_attribute(opentelemetry::KeyValue::new(
+            "traces.count",
+            traces.len() as i64,
+        ));
+        batch_span.end();
 
         Ok(traces)
     }

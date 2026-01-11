@@ -104,13 +104,8 @@ impl KafkaIngestion {
     }
 
     async fn process_message(&self, payload: &[u8]) -> Result<()> {
-        // Try to parse as JSON
-        let json_value: serde_json::Value =
-            serde_json::from_slice(payload).context("Failed to parse Kafka message as JSON")?;
-
-        // Convert to RecordBatch
-        let json_data = serde_json::to_vec(&json_value)?;
-        let cursor = Cursor::new(json_data);
+        // Direct stream processing without intermediate parsing
+        let cursor = Cursor::new(payload);
 
         let engine_lock = self.engine.read().await;
         let schema = engine_lock.schema();
@@ -208,101 +203,71 @@ async fn handle_websocket_stream(
     while let Some(msg) = receiver.next().await {
         match msg {
             Ok(Message::Text(text)) => {
-                // Try to parse as JSON
-                match serde_json::from_str::<serde_json::Value>(&text) {
-                    Ok(json_value) => {
-                        // Convert to RecordBatch
-                        let json_data = match serde_json::to_vec(&json_value) {
-                            Ok(data) => data,
-                            Err(e) => {
-                                error!(error = %e, "Failed to serialize JSON");
-                                continue;
-                            }
-                        };
-                        let cursor = Cursor::new(json_data);
+                // Direct processing
+                let cursor = Cursor::new(text.into_bytes());
 
-                        let engine_lock = engine.read().await;
-                        let schema = engine_lock.schema();
-                        drop(engine_lock);
+                let engine_lock = engine.read().await;
+                let schema = engine_lock.schema();
+                drop(engine_lock);
 
-                        let reader = match ReaderBuilder::new(schema.clone()).build(cursor) {
-                            Ok(r) => r,
-                            Err(e) => {
-                                error!(error = %e, "Failed to create JSON reader");
-                                continue;
-                            }
-                        };
+                let reader = match ReaderBuilder::new(schema.clone()).build(cursor) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        error!(error = %e, "Failed to create JSON reader");
+                        continue;
+                    }
+                };
 
-                        // Process all batches
-                        for batch_result in reader {
-                            match batch_result {
-                                Ok(batch) => {
-                                    let mut engine_lock = engine.write().await;
-                                    match engine_lock.process_batch(&batch).await {
-                                        Ok(_traces) => {
-                                            debug!(
-                                                rows = batch.num_rows(),
-                                                "Processed batch from WebSocket"
-                                            );
-                                        }
-                                        Err(e) => {
-                                            error!(error = %e, "Failed to process batch from WebSocket");
-                                        }
-                                    }
+                // Process all batches
+                for batch_result in reader {
+                    match batch_result {
+                        Ok(batch) => {
+                            let mut engine_lock = engine.write().await;
+                            match engine_lock.process_batch(&batch).await {
+                                Ok(_traces) => {
+                                    debug!(
+                                        rows = batch.num_rows(),
+                                        "Processed batch from WebSocket"
+                                    );
                                 }
                                 Err(e) => {
-                                    error!(error = %e, "Failed to read batch from WebSocket message");
+                                    error!(error = %e, "Failed to process batch from WebSocket");
                                 }
                             }
                         }
-                    }
-                    Err(e) => {
-                        error!(error = %e, "Failed to parse WebSocket message as JSON");
+                        Err(e) => {
+                            error!(error = %e, "Failed to read batch from WebSocket message");
+                        }
                     }
                 }
             }
             Ok(Message::Binary(data)) => {
-                // Try to parse binary as JSON
-                match serde_json::from_slice::<serde_json::Value>(&data) {
-                    Ok(json_value) => {
-                        // Same processing as text
-                        let json_data = match serde_json::to_vec(&json_value) {
-                            Ok(data) => data,
-                            Err(e) => {
-                                error!(error = %e, "Failed to serialize JSON");
-                                continue;
-                            }
-                        };
-                        let cursor = Cursor::new(json_data);
+                // Direct processing
+                let cursor = Cursor::new(data);
 
-                        let engine_lock = engine.read().await;
-                        let schema = engine_lock.schema();
-                        drop(engine_lock);
+                let engine_lock = engine.read().await;
+                let schema = engine_lock.schema();
+                drop(engine_lock);
 
-                        let reader = match ReaderBuilder::new(schema.clone()).build(cursor) {
-                            Ok(r) => r,
-                            Err(e) => {
-                                error!(error = %e, "Failed to create JSON reader");
-                                continue;
-                            }
-                        };
+                let reader = match ReaderBuilder::new(schema.clone()).build(cursor) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        error!(error = %e, "Failed to create JSON reader");
+                        continue;
+                    }
+                };
 
-                        for batch_result in reader {
-                            match batch_result {
-                                Ok(batch) => {
-                                    let mut engine_lock = engine.write().await;
-                                    if let Err(e) = engine_lock.process_batch(&batch).await {
-                                        error!(error = %e, "Failed to process batch from WebSocket");
-                                    }
-                                }
-                                Err(e) => {
-                                    error!(error = %e, "Failed to read batch from WebSocket message");
-                                }
+                for batch_result in reader {
+                    match batch_result {
+                        Ok(batch) => {
+                            let mut engine_lock = engine.write().await;
+                            if let Err(e) = engine_lock.process_batch(&batch).await {
+                                error!(error = %e, "Failed to process batch from WebSocket");
                             }
                         }
-                    }
-                    Err(e) => {
-                        error!(error = %e, "Failed to parse WebSocket binary as JSON");
+                        Err(e) => {
+                            error!(error = %e, "Failed to read batch from WebSocket message");
+                        }
                     }
                 }
             }

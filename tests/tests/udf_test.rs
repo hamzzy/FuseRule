@@ -1,113 +1,104 @@
 //! Tests for User-Defined Functions (UDFs) integration
 
-use arrow::array::{Float64Array, StringArray};
+use arrow::array::{Float64Array, ArrayRef};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion::logical_expr::{ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility};
+use datafusion::common::Result as DFResult;
 use fuse_rule_core::evaluator::{DataFusionEvaluator, RuleEvaluator};
 use fuse_rule_core::rule::Rule;
-use fuse_rule_core::udf::{BuiltinUdfs, UdfRegistry};
+use fuse_rule_core::udf::UdfRegistry;
 use std::sync::Arc;
 
-#[tokio::test]
-async fn test_udf_registry() {
-    let mut registry = UdfRegistry::new();
-    BuiltinUdfs::register_all(&mut registry);
-    
-    let functions = registry.list();
-    assert!(functions.contains(&"abs".to_string()));
-    assert!(functions.contains(&"upper".to_string()));
-    assert!(functions.contains(&"lower".to_string()));
+// Define a custom UDF: "add_one"
+#[derive(Debug)]
+struct AddOneUdf {
+    signature: Signature,
+}
+
+impl AddOneUdf {
+    fn new() -> Self {
+        Self {
+            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for AddOneUdf {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "add_one"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> DFResult<DataType> {
+        Ok(DataType::Float64)
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> DFResult<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let arr = args[0].as_any().downcast_ref::<Float64Array>().unwrap();
+        
+        let result: Float64Array = arr.iter().map(|v| v.map(|x| x + 1.0)).collect();
+        Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
+    }
 }
 
 #[tokio::test]
-async fn test_evaluator_with_udf_registry() {
+async fn test_custom_udf_registration() {
+    // 1. Create Registry and Register UDF
     let mut registry = UdfRegistry::new();
-    BuiltinUdfs::register_all(&mut registry);
+    let udf = ScalarUDF::from(AddOneUdf::new());
+    registry.register_udf(Arc::new(udf));
+
+    // 2. Create Evaluator with Registry
     let evaluator = DataFusionEvaluator::with_udf_registry(registry).unwrap();
     
-    // Verify UDF registry is accessible
-    let functions = evaluator.udf_registry().list();
-    assert!(!functions.is_empty());
-}
-
-#[tokio::test]
-async fn test_rule_with_builtin_functions() {
-    // Test that rules can use DataFusion's built-in functions
-    // Note: Custom UDFs are not yet fully implemented, but the structure is in place
-    let evaluator = DataFusionEvaluator::new();
+    // 3. Define Schema
     let schema = Schema::new(vec![
         Field::new("price", DataType::Float64, true),
-        Field::new("symbol", DataType::Utf8, true),
     ]);
 
-    // Test with ABS function (DataFusion built-in)
+    // 4. Define Rule using Custom UDF
+    // "add_one(price) > 100" means price + 1 > 100, so price > 99
     let rule = Rule {
-        id: "test_abs".to_string(),
-        name: "Test ABS".to_string(),
-        predicate: "ABS(price) > 100".to_string(),
+        id: "test_udf".to_string(),
+        name: "Test UDF".to_string(),
+        predicate: "add_one(price) > 100".to_string(),
         action: "logger".to_string(),
         window_seconds: None,
         version: 1,
         enabled: true,
-        description: Some("Test rule with ABS function".to_string()),
+        description: Some("Test rule with custom UDF".to_string()),
         tags: vec!["test".to_string()],
     };
 
+    // 5. Compile Rule
     let compiled = evaluator.compile(rule, &Arc::new(schema.clone()));
-    assert!(compiled.is_ok(), "Rule with ABS function should compile");
+    assert!(compiled.is_ok(), "Should compile rule with custom UDF");
+    let compiled_rule = compiled.unwrap();
 
-    // Test with UPPER function (DataFusion built-in)
-    let rule2 = Rule {
-        id: "test_upper".to_string(),
-        name: "Test UPPER".to_string(),
-        predicate: "UPPER(symbol) = 'AAPL'".to_string(),
-        action: "logger".to_string(),
-        window_seconds: None,
-        version: 1,
-        enabled: true,
-        description: Some("Test rule with UPPER function".to_string()),
-        tags: vec!["test".to_string()],
-    };
-
-    let compiled2 = evaluator.compile(rule2, &Arc::new(schema));
-    assert!(compiled2.is_ok(), "Rule with UPPER function should compile");
-}
-
-#[tokio::test]
-async fn test_rule_evaluation_with_functions() {
-    let evaluator = DataFusionEvaluator::new();
-    let schema = Schema::new(vec![
-        Field::new("price", DataType::Float64, true),
-    ]);
-
-    let rule = Rule {
-        id: "test".to_string(),
-        name: "Test".to_string(),
-        predicate: "ABS(price) > 50".to_string(),
-        action: "logger".to_string(),
-        window_seconds: None,
-        version: 1,
-        enabled: true,
-        description: None,
-        tags: Vec::new(),
-    };
-
-    let compiled = evaluator.compile(rule, &Arc::new(schema.clone())).unwrap();
-
-    // Create batch with negative prices
-    let price_array = Arc::new(Float64Array::from(vec![-100.0, -30.0, 60.0]));
+    // 6. Evaluate Batch
+    // 99.0 -> add_one -> 100.0 > 100 is False
+    // 100.0 -> add_one -> 101.0 > 100 is True
+    let price_array = Arc::new(Float64Array::from(vec![99.0, 100.0]));
     let batch = RecordBatch::try_new(
         Arc::new(schema),
         vec![price_array],
     ).unwrap();
 
-    // Evaluate
-    let results = evaluator.evaluate_batch(&batch, &[compiled], &[vec![]]).await.unwrap();
+    let results = evaluator.evaluate_batch(&batch, &[compiled_rule], &[vec![]]).await.unwrap();
     
-    // ABS(-100) = 100 > 50 = true
-    // ABS(-30) = 30 > 50 = false
-    // ABS(60) = 60 > 50 = true
-    // So at least one row matches, result should be True
+    // Result logic:
+    // Row 0: 99.0 -> 100.0 > 100 -> False
+    // Row 1: 100.0 -> 101.0 > 100 -> True
+    // evaluate_batch returns True if ANY row matches in the batch (for non-aggregates)
+    // Here, Row 1 matches, so result should be True.
     assert!(matches!(results[0].0, fuse_rule_core::state::PredicateResult::True));
 }
-
