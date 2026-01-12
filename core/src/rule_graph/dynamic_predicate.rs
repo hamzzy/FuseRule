@@ -136,13 +136,24 @@ impl PredicateLoader {
                     // Static predicates don't need reloading
                     Ok(())
                 }
-                PredicateSource::Database { .. } => {
-                    // TODO: Implement database loading
-                    anyhow::bail!("Database predicate loading not yet implemented");
+                PredicateSource::Database {
+                    connection_string,
+                    table,
+                    predicate_column,
+                    rule_id_column,
+                } => {
+                    self.reload_from_database(
+                        rule_id,
+                        connection_string,
+                        table,
+                        predicate_column,
+                        rule_id_column,
+                    )
+                    .await
                 }
-                PredicateSource::S3 { .. } => {
-                    // TODO: Implement S3 loading
-                    anyhow::bail!("S3 predicate loading not yet implemented");
+                PredicateSource::S3 { bucket, key, region } => {
+                    self.reload_from_s3(rule_id, bucket, key, region.as_deref())
+                        .await
                 }
                 PredicateSource::Http { url, auth_header } => {
                     self.reload_from_http(rule_id, url, auth_header.as_deref())
@@ -154,9 +165,133 @@ impl PredicateLoader {
         }
     }
 
+    async fn reload_from_s3(
+        &self,
+        rule_id: &str,
+        bucket: &str,
+        key: &str,
+        region: Option<&str>,
+    ) -> Result<()> {
+        use aws_sdk_s3::Client;
+
+        // Load AWS config
+        let mut config_loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
+        if let Some(r) = region {
+            config_loader = config_loader.region(aws_config::Region::new(r.to_string()));
+        }
+        let config = config_loader.load().await;
+        let client = Client::new(&config);
+
+        // Fetch object from S3
+        let response = client
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to fetch from S3: {}", e))?;
+
+        // Read body
+        let body_bytes = response
+            .body
+            .collect()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read S3 object body: {}", e))?
+            .into_bytes();
+
+        // Parse JSON
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to parse S3 object as JSON: {}", e))?;
+
+        // Update predicates (same logic as HTTP)
+        let mut predicates = self.predicates.write().await;
+        if let Some(dynamic_pred) = predicates.get_mut(rule_id) {
+            if let Some(versions_obj) = body.get("versions").and_then(|v| v.as_object()) {
+                dynamic_pred.versions.clear();
+                for (version_id, predicate_val) in versions_obj {
+                    if let Some(predicate_str) = predicate_val.as_str() {
+                        dynamic_pred.versions.insert(version_id.clone(), predicate_str.to_string());
+                    }
+                }
+            }
+
+            if let Some(active_version) = body.get("active_version").and_then(|v| v.as_str()) {
+                dynamic_pred.active_version = Some(active_version.to_string());
+            }
+
+            if let Some(flags_obj) = body.get("feature_flags").and_then(|v| v.as_object()) {
+                dynamic_pred.feature_flags.clear();
+                for (tenant_id, version_id) in flags_obj {
+                    if let Some(version_str) = version_id.as_str() {
+                        dynamic_pred.feature_flags.insert(tenant_id.clone(), version_str.to_string());
+                    }
+                }
+            }
+
+            tracing::info!(
+                rule_id = %rule_id,
+                bucket = %bucket,
+                key = %key,
+                versions = dynamic_pred.versions.len(),
+                "Reloaded predicate from S3"
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn reload_from_database(
+        &self,
+        rule_id: &str,
+        connection_string: &str,
+        table: &str,
+        predicate_column: &str,
+        rule_id_column: &str,
+    ) -> Result<()> {
+        use clickhouse::Client;
+
+        let client = Client::default().with_url(connection_string);
+
+        // Query format: SELECT predicate, version_id FROM table WHERE rule_id = ?
+        let query = format!(
+            "SELECT {} as predicate, version_id FROM {} WHERE {} = ?",
+            predicate_column, table, rule_id_column
+        );
+
+        #[derive(serde::Deserialize, clickhouse::Row)]
+        struct PredicateRow {
+            predicate: String,
+            version_id: String,
+        }
+
+        let rows: Vec<PredicateRow> = client
+            .query(&query)
+            .bind(rule_id)
+            .fetch_all()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to query database: {}", e))?;
+
+        let mut predicates = self.predicates.write().await;
+        if let Some(dynamic_pred) = predicates.get_mut(rule_id) {
+            // Clear existing versions and add new ones
+            dynamic_pred.versions.clear();
+            for row in rows {
+                dynamic_pred.versions.insert(row.version_id, row.predicate);
+            }
+
+            tracing::info!(
+                rule_id = %rule_id,
+                versions = dynamic_pred.versions.len(),
+                "Reloaded predicate from database"
+            );
+        }
+
+        Ok(())
+    }
+
     async fn reload_from_http(
         &self,
-        _rule_id: &str,
+        rule_id: &str,
         url: &str,
         auth_header: Option<&str>,
     ) -> Result<()> {
@@ -168,10 +303,56 @@ impl PredicateLoader {
         }
 
         let response = request.send().await?;
-        let _body: serde_json::Value = response.json().await?;
+        let body: serde_json::Value = response.json().await?;
 
-        // TODO: Parse response and update predicate versions
-        // For now, just validate we can fetch it
+        // Parse response and update predicate versions
+        // Expected format:
+        // {
+        //   "rule_id": "example_rule",
+        //   "versions": {
+        //     "v1": "price > 100",
+        //     "v2": "price > 200"
+        //   },
+        //   "active_version": "v1",
+        //   "feature_flags": {
+        //     "tenant_123": "v2"
+        //   }
+        // }
+
+        let mut predicates = self.predicates.write().await;
+        if let Some(dynamic_pred) = predicates.get_mut(rule_id) {
+            // Update versions if present
+            if let Some(versions_obj) = body.get("versions").and_then(|v| v.as_object()) {
+                dynamic_pred.versions.clear();
+                for (version_id, predicate_val) in versions_obj {
+                    if let Some(predicate_str) = predicate_val.as_str() {
+                        dynamic_pred.versions.insert(version_id.clone(), predicate_str.to_string());
+                    }
+                }
+            }
+
+            // Update active version if present
+            if let Some(active_version) = body.get("active_version").and_then(|v| v.as_str()) {
+                dynamic_pred.active_version = Some(active_version.to_string());
+            }
+
+            // Update feature flags if present
+            if let Some(flags_obj) = body.get("feature_flags").and_then(|v| v.as_object()) {
+                dynamic_pred.feature_flags.clear();
+                for (tenant_id, version_id) in flags_obj {
+                    if let Some(version_str) = version_id.as_str() {
+                        dynamic_pred.feature_flags.insert(tenant_id.clone(), version_str.to_string());
+                    }
+                }
+            }
+
+            tracing::info!(
+                rule_id = %rule_id,
+                versions = dynamic_pred.versions.len(),
+                "Reloaded predicate from HTTP"
+            );
+        }
+
         Ok(())
     }
 

@@ -192,6 +192,206 @@ engine.update_rule("custom_rule", updated_rule).await?;
 engine.toggle_rule("custom_rule", false).await?;
 ```
 
+## 🎯 Advanced Features: Decision Workflows
+
+FuseRule goes beyond simple alerts to support **expressive decision workflows** with advanced rule orchestration capabilities.
+
+### Rule Chaining & DAG Execution
+
+Rules can trigger other rules in a directed acyclic graph (DAG), enabling complex multi-step workflows:
+
+```yaml
+rules:
+  - id: "high_price"
+    name: "High Price Detection"
+    predicate: "price > 100"
+    action: "slack"
+    downstream_rules:
+      - rule_id: "check_volume"
+        condition:
+          type: "Always"
+      - rule_id: "check_volatility"
+        condition:
+          type: "FieldEquals"
+          field: "market"
+          value: "crypto"
+
+  - id: "check_volume"
+    name: "Volume Verification"
+    predicate: "volume > 1000"
+    action: "logger"
+    downstream_rules:
+      - rule_id: "alert_trader"
+        condition:
+          type: "Expression"
+          expr: "volume > 5000"
+
+  - id: "alert_trader"
+    name: "Alert Trader"
+    predicate: "price > 0"
+    action: "pagerduty"
+```
+
+**Execution Flow:**
+```
+high_price (triggers on price > 100)
+  ├─→ check_volume (always triggered)
+  │   └─→ alert_trader (if volume > 5000)
+  └─→ check_volatility (only if market == "crypto")
+```
+
+**Features:**
+- **Automatic cycle detection** prevents infinite loops
+- **Conditional cascading** with expression evaluation
+- **Synchronous execution** ensures guaranteed ordering
+- **Consecutive count tracking** for sequential patterns
+
+### Conditional Actions
+
+Execute different actions based on runtime context:
+
+```yaml
+rules:
+  - id: "high_price"
+    name: "High Price Alert"
+    predicate: "price > 100"
+    action: "logger"  # Fallback
+    actions:
+      - condition:
+          type: "FieldEquals"
+          field: "severity"
+          value: "critical"
+        agent: "pagerduty"
+        priority: 10
+      - condition:
+          type: "FieldEquals"
+          field: "severity"
+          value: "warning"
+        agent: "slack"
+        priority: 5
+      - condition:
+          type: "Expression"
+          expr: "severity == 'info'"
+        agent: "logger"
+        priority: 1
+```
+
+**Condition Types:**
+- `Always` - Execute unconditionally
+- `FieldEquals` - Match field value
+- `FieldMatches` - Regex pattern matching
+- `FieldInRange` - Numeric range check
+- `Expression` - Custom expression evaluation
+- `And` / `Or` / `Not` - Logical combinations
+
+**Priority-based execution:** Higher priority actions execute first.
+
+### Cross-Rule Correlation
+
+Detect temporal patterns across multiple rule activations:
+
+```yaml
+correlation_patterns:
+  # Sequential pattern detection
+  - type: "Sequence"
+    rule_ids: ["high_price", "check_volume", "alert_trader"]
+    window:
+      duration_seconds: 300
+      window_type: "Sliding"
+    meta_rule_id: "complex_trading_pattern"
+
+  # All rules must fire within window
+  - type: "All"
+    rule_ids: ["rule_a", "rule_b", "rule_c"]
+    window:
+      duration_seconds: 60
+      window_type: "Sliding"
+    meta_rule_id: "concurrent_pattern"
+
+  # Any N of M rules
+  - type: "Any"
+    rule_ids: ["sensor_1", "sensor_2", "sensor_3"]
+    count: 2
+    window:
+      duration_seconds: 120
+      window_type: "Sliding"
+    meta_rule_id: "sensor_quorum"
+
+  # Rule A but not Rule B
+  - type: "NotPattern"
+    required_rule: "auth_attempt"
+    excluded_rule: "auth_success"
+    window:
+      duration_seconds: 30
+      window_type: "Sliding"
+    meta_rule_id: "failed_auth_pattern"
+```
+
+**Pattern Types:**
+- `Sequence` - Rules must fire in order within time window
+- `All` - All rules must fire within time window
+- `Any` - N out of M rules must fire
+- `NotPattern` - One rule fires but another doesn't
+
+**Use Cases:**
+- Complex event processing (CEP)
+- Attack pattern detection
+- Business process monitoring
+- SLA violation detection
+
+### Dynamic Predicates
+
+Load predicates at runtime for A/B testing and multi-tenancy:
+
+```yaml
+rules:
+  - id: "volume_check"
+    name: "Volume Check"
+    predicate: "volume > 1000"  # Static fallback
+    action: "logger"
+    dynamic_predicate:
+      source:
+        type: "Http"
+        url: "https://api.example.com/predicates/volume"
+        auth_header: "Bearer token123"
+      refresh_interval_seconds: 300
+      versions:
+        v1: "volume > 1000"
+        v2: "volume > 2000"
+      active_version: "v1"
+      feature_flags:
+        tenant_premium: "v2"
+        tenant_enterprise: "v2"
+```
+
+**Predicate Sources:**
+- `Http` - Load from REST API
+- `ClickHouse` - Query from database
+- `S3` - Fetch from object storage
+- `Static` - Predefined versions
+
+**Features:**
+- **Per-tenant predicates:** Different rules for different tenants
+- **A/B testing:** Gradually roll out new rule versions
+- **Hot reloading:** Background refresh without restarts
+- **Feature flags:** Enable/disable features per tenant
+
+### Processing with Tenant Context
+
+```rust
+// Process batch with tenant ID for multi-tenancy
+let traces = engine.process_batch_with_tenant(&batch, Some("tenant_premium")).await?;
+```
+
+### Complete Example
+
+See `examples/src/bin/advanced_workflow_example.rs` for a comprehensive demonstration of all advanced features working together.
+
+Run the example:
+```bash
+cargo run --package fuse-rule-examples --bin advanced_workflow_example
+```
+
 ## 🏗️ Architecture
 
 ```

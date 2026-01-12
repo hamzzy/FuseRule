@@ -48,6 +48,8 @@ opentelemetry_sdk = { version = "0.27", features = ["trace", "rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["trace", "grpc-tonic"] }
 clickhouse = { version = "0.12", features = ["rustls-tls"] }
 regex = "1.10"
+aws-config = "1.0"
+aws-sdk-s3 = "1.0"
 
 [profile.release]
 lto = true

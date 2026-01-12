@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::rule_graph::conditional_action::ConditionalAction;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rule {
@@ -16,6 +17,15 @@ pub struct Rule {
     /// Optional tags for categorizing and filtering rules
     #[serde(default)]
     pub tags: Vec<String>,
+    /// NEW: Conditional actions (multiple actions per rule)
+    #[serde(default)]
+    pub conditional_actions: Vec<ConditionalAction>,
+    /// NEW: Downstream rules for DAG execution
+    #[serde(default)]
+    pub downstream_rules: Vec<String>,
+    /// NEW: Flag indicating if this rule uses dynamic predicates
+    #[serde(default)]
+    pub has_dynamic_predicate: bool,
 }
 
 fn default_enabled() -> bool {

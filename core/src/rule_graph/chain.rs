@@ -26,6 +26,7 @@ pub struct ChainedRule {
 
 /// Condition for triggering a downstream rule
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum TriggerCondition {
     /// Always trigger when parent activates
     Always,

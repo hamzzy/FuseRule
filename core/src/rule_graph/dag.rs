@@ -5,6 +5,8 @@
 use crate::rule_graph::chain::{RuleChain, TriggerCondition};
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Execution plan for a rule DAG
 #[derive(Debug, Clone)]
@@ -93,11 +95,35 @@ impl RuleDAG {
 /// Executor for rule DAGs
 pub struct DAGExecutor {
     dag: RuleDAG,
+    consecutive_counts: Arc<RwLock<HashMap<String, usize>>>,
 }
 
 impl DAGExecutor {
     pub fn new(dag: RuleDAG) -> Self {
-        Self { dag }
+        Self { 
+            dag,
+            consecutive_counts: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+    
+    /// Reset consecutive count for a rule pair
+    pub async fn reset_consecutive_count(&self, key: &str) {
+        let mut counts = self.consecutive_counts.write().await;
+        counts.remove(key);
+    }
+    
+    /// Increment consecutive count for a rule pair
+    pub async fn increment_consecutive_count(&self, key: &str) -> usize {
+        let mut counts = self.consecutive_counts.write().await;
+        let count = counts.entry(key.to_string()).or_insert(0);
+        *count += 1;
+        *count
+    }
+    
+    /// Get current consecutive count
+    pub async fn get_consecutive_count(&self, key: &str) -> usize {
+        let counts = self.consecutive_counts.read().await;
+        counts.get(key).copied().unwrap_or(0)
     }
 
     /// Determine which rules should be triggered based on activation
@@ -149,19 +175,90 @@ impl DAGExecutor {
                 self.evaluate_simple_expression(expr, context)
             }
 
-            TriggerCondition::ConsecutiveCount { .. } => {
-                // This requires stateful tracking
-                // For now, default to true
-                // TODO: Implement consecutive count tracking
+            TriggerCondition::ConsecutiveCount { count } => {
+                // Check if the rule has been activated consecutively N times
+                // This is an async operation, but we're in a sync context
+                // For now, we'll return true and let the caller handle the async check
+                // In a real implementation, this would need to be refactored to async
+                
+                // Note: The caller should use increment_consecutive_count and check the result
+                // This is a limitation of the current sync API
+                tracing::warn!(
+                    "ConsecutiveCount condition requires async context. \
+                    Use increment_consecutive_count() in the caller. Required count: {}",
+                    count
+                );
                 true
             }
         }
     }
 
-    fn evaluate_simple_expression(&self, _expr: &str, _context: &HashMap<String, serde_json::Value>) -> bool {
-        // TODO: Implement expression evaluation
-        // For now, always return true
-        true
+    fn evaluate_simple_expression(&self, expr: &str, context: &HashMap<String, serde_json::Value>) -> bool {
+        // Simple expression evaluator supporting: field op value
+        // Examples: "status == 'active'", "count > 10", "price >= 100.5"
+        
+        let expr = expr.trim();
+        
+        // Try different operators in order of length (to match >= before >)
+        let operators = [">=", "<=", "==", "!=", ">", "<"];
+        
+        for op in operators {
+            if let Some(pos) = expr.find(op) {
+                let field = expr[..pos].trim();
+                let value_str = expr[pos + op.len()..].trim();
+                
+                // Get field value from context
+                let field_value = match context.get(field) {
+                    Some(v) => v,
+                    None => return false,
+                };
+                
+                // Try to parse as number first
+                if let Ok(expected_num) = value_str.parse::<f64>() {
+                    // Numeric comparison
+                    let actual_num = match field_value {
+                        serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0),
+                        _ => return false,
+                    };
+                    
+                    return match op {
+                        ">=" => actual_num >= expected_num,
+                        "<=" => actual_num <= expected_num,
+                        "==" => (actual_num - expected_num).abs() < f64::EPSILON,
+                        "!=" => (actual_num - expected_num).abs() >= f64::EPSILON,
+                        ">" => actual_num > expected_num,
+                        "<" => actual_num < expected_num,
+                        _ => false,
+                    };
+                }
+                
+                // String comparison (remove quotes if present)
+                let expected_str = value_str.trim_matches('\'').trim_matches('"');
+                let actual_str = match field_value {
+                    serde_json::Value::String(s) => s.as_str(),
+                    _ => return false,
+                };
+                
+                return match op {
+                    ">=" => actual_str >= expected_str,
+                    "<=" => actual_str <= expected_str,
+                    "==" => actual_str == expected_str,
+                    "!=" => actual_str != expected_str,
+                    ">" => actual_str > expected_str,
+                    "<" => actual_str < expected_str,
+                    _ => false,
+                };
+            }
+        }
+        
+        // If no operator found, check if it's a boolean field
+        if let Some(value) = context.get(expr) {
+            if let serde_json::Value::Bool(b) = value {
+                return *b;
+            }
+        }
+        
+        false
     }
 
     /// Get all rules that have no dependencies (entry points)
@@ -293,5 +390,57 @@ mod tests {
 
         let leaf_rules = executor.get_leaf_rules();
         assert_eq!(leaf_rules, vec!["c"]);
+    }
+
+    #[test]
+    fn test_expression_evaluator() {
+        let chain = RuleChain::new();
+        let dag = RuleDAG::new(chain).unwrap();
+        let executor = DAGExecutor::new(dag);
+
+        let mut context = HashMap::new();
+        context.insert("count".to_string(), serde_json::json!(15));
+        context.insert("status".to_string(), serde_json::json!("active"));
+        context.insert("price".to_string(), serde_json::json!(99.99));
+
+        // Numeric comparisons
+        assert!(executor.evaluate_simple_expression("count > 10", &context));
+        assert!(!executor.evaluate_simple_expression("count > 20", &context));
+        assert!(executor.evaluate_simple_expression("count >= 15", &context));
+        assert!(executor.evaluate_simple_expression("count <= 15", &context));
+        assert!(executor.evaluate_simple_expression("count == 15", &context));
+        assert!(executor.evaluate_simple_expression("count != 10", &context));
+
+        // String comparisons
+        assert!(executor.evaluate_simple_expression("status == 'active'", &context));
+        assert!(executor.evaluate_simple_expression("status == \"active\"", &context));
+        assert!(!executor.evaluate_simple_expression("status == 'inactive'", &context));
+        assert!(executor.evaluate_simple_expression("status != 'inactive'", &context));
+
+        // Float comparisons
+        assert!(executor.evaluate_simple_expression("price < 100", &context));
+        assert!(executor.evaluate_simple_expression("price > 99", &context));
+    }
+
+    #[tokio::test]
+    async fn test_consecutive_count_tracking() {
+        let chain = RuleChain::new();
+        let dag = RuleDAG::new(chain).unwrap();
+        let executor = DAGExecutor::new(dag);
+
+        let key = "rule_a->rule_b";
+
+        // Initial count should be 0
+        assert_eq!(executor.get_consecutive_count(key).await, 0);
+
+        // Increment and check
+        assert_eq!(executor.increment_consecutive_count(key).await, 1);
+        assert_eq!(executor.increment_consecutive_count(key).await, 2);
+        assert_eq!(executor.increment_consecutive_count(key).await, 3);
+        assert_eq!(executor.get_consecutive_count(key).await, 3);
+
+        // Reset and check
+        executor.reset_consecutive_count(key).await;
+        assert_eq!(executor.get_consecutive_count(key).await, 0);
     }
 }

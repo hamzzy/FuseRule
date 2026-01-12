@@ -24,6 +24,8 @@ opentelemetry_sdk = { workspace = true }
 clickhouse = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-s3 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

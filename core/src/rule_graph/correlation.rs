@@ -28,6 +28,7 @@ pub enum WindowType {
 
 /// Correlation pattern definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum CorrelationPattern {
     /// All rules must fire within time window
     All {
